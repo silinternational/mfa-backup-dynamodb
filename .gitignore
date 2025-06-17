@@ -1,0 +1,28 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+terraform.tfplan
+
+# Lambda packages
+*.zip
+lambda-packages/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+test_*.json
