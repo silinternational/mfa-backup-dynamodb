@@ -60,7 +60,7 @@ git push origin main
 
 print_success "🎉 Deployment initiated!"
 echo ""
-echo "🔗 Monitor at: https://app.terraform.io/app/YOUR_ORG/workspaces/mfa-backup-system"
+echo "🔗 Monitor at: https://app.terraform.io/app/gtis/workspaces/mfa-backup-system"
 echo ""
 echo "📋 What happens next:"
 echo "1. Terraform Cloud runs plan"
