@@ -74,7 +74,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
     id     = "mfa_backup_lifecycle_${var.environment}"
     status = "Enabled"
 
-    filter {}
+    filter {
+      prefix = "exports/"
+    }
 
     # Different retention for dev vs prod
     expiration {

@@ -12,6 +12,12 @@ variable "itse_app_env" {
   type        = string
 }
 
+variable "aws_region" {
+  description = "AWS region - Set in Terraform Cloud workspace"
+  type        = string
+  default     = "us-east-1"
+}
+
 variable "dynamodb_tables" {
   description = "List of DynamoDB table suffixes to backup"
   type        = list(string)
@@ -21,14 +27,11 @@ variable "dynamodb_tables" {
 variable "backup_retention_days" {
   description = "Number of days to retain backups - Set in Terraform Cloud workspace"
   type        = number
+  default     = 31
 }
 
 variable "lambda_timeout" {
   description = "Lambda function timeout in seconds - Set in Terraform Cloud workspace"
   type        = number
-}
-
-variable "aws_region" {
-  description = "AWS region - Set in Terraform Cloud workspace"
-  type        = string
+  default     = 900
 }
