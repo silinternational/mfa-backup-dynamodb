@@ -35,3 +35,9 @@ variable "lambda_timeout" {
   type        = number
   default     = 900
 }
+
+variable "backup_schedule" {
+  description = "Cron expression for backup schedule"
+  type        = string
+  default     = "cron(0 2 * * ? *)" # 2 AM daily
+}

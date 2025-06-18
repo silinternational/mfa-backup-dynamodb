@@ -7,8 +7,10 @@
 terraform.tfplan
 
 # Lambda packages
-*.zip
+
 lambda-packages/
+test_*.zip
+manual_*.zip
 
 # Python
 __pycache__/
