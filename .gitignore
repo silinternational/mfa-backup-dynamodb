@@ -16,9 +16,7 @@ __pycache__/
 *.pyc
 
 # IDE
-.vscode/
 .idea/
-*.swp
 
 # OS
 .DS_Store
