@@ -23,14 +23,14 @@ data "aws_region" "current" {}
 # Archive Lambda functions
 data "archive_file" "daily_backup" {
   type        = "zip"
-  source_dir  = "../lambda/daily_backup"
+  source_dir  = "./lambda/daily_backup"
   output_path = "/tmp/daily_backup_lambda_${var.environment}.zip"
   excludes    = ["*.pyc", "__pycache__"]
 }
 
 data "archive_file" "disaster_recovery" {
   type        = "zip"
-  source_dir  = "../lambda/disaster_recovery"
+  source_dir  = "./lambda/disaster_recovery"
   output_path = "/tmp/disaster_recovery_lambda_${var.environment}.zip"
   excludes    = ["*.pyc", "__pycache__"]
 }
