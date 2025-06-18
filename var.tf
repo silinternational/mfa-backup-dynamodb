@@ -8,7 +8,7 @@ variable "environment" {
 }
 
 variable "itse_app_env" {
-  description = "ITSE app environment - Set in Terraform Cloud workspace"
+  description = "ITSE app environment"
   type        = string
 }
 
