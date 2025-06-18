@@ -13,7 +13,7 @@ locals {
 
   # Table names matching your actual pattern: mfa-api_ENV_TABLE_global
   table_names = [
-    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"
+    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}"
   ]
 }
 
