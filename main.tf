@@ -135,10 +135,16 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "dynamodb:DescribeTable",
           "dynamodb:ListExports"
         ]
-        Resource = [
-          for table_name in local.table_names :
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${table_name}"
-        ]
+        Resource = concat(
+          # Table permissions
+          [for table_name in local.table_names :
+            "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${table_name}"
+          ],
+          # Export permissions - pattern for export ARNs
+          [for table_name in local.table_names :
+            "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${table_name}/export/*"
+          ]
+        )
       },
       {
         Effect = "Allow"
@@ -164,7 +170,6 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
     ]
   })
 }
-
 # Daily Backup Lambda Function
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
