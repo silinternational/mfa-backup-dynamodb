@@ -182,7 +182,6 @@ resource "aws_lambda_function" "daily_backup" {
       # Required environment variables (no fallbacks)
       BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
       ENVIRONMENT     = var.environment
-      AWS_REGION      = data.aws_region.current.name
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
     }

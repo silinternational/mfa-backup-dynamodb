@@ -15,13 +15,11 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
 
-
 def decimal_default(obj):
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
-
 
 def get_account_id():
     """Get AWS account ID"""
@@ -32,6 +30,16 @@ def get_account_id():
         logger.error(f"Failed to get account ID: {str(e)}")
         raise
 
+def get_region():
+    """Get AWS region"""
+    try:
+        # Region is automatically available in Lambda context
+        session = boto3.Session()
+        return session.region_name
+    except Exception as e:
+        logger.error(f"Failed to get region: {str(e)}")
+        # Fallback to us-east-1 if region detection fails
+        return 'us-east-1'
 
 def get_tables_to_backup():
     """Get the list of tables to backup from Terraform environment variables"""
@@ -63,7 +71,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
     try:
         # Get table ARN
         account_id = get_account_id()
-        region = os.environ.get('AWS_REGION', 'us-east-1')
+        region = get_region()
         table_arn = f"arn:aws:dynamodb:{region}:{account_id}:table/{table_name}"
 
         # Generate S3 prefix for this export
