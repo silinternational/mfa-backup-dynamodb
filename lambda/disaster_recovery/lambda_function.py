@@ -16,13 +16,11 @@ dynamodb = boto3.client('dynamodb')
 dynamodb_resource = boto3.resource('dynamodb')
 s3 = boto3.client('s3')
 
-
 def decimal_default(obj):
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
-
 
 def get_tables_to_restore():
     """Get the list of tables to restore from environment variables"""
@@ -39,7 +37,6 @@ def get_tables_to_restore():
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse DYNAMODB_TABLES: {e}")
         raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
-
 
 def get_available_backups(s3_bucket):
     """Get list of available backup dates"""
@@ -63,7 +60,6 @@ def get_available_backups(s3_bucket):
         logger.error(f"Failed to get available backups: {str(e)}")
         return []
 
-
 def get_backup_manifest(s3_bucket, backup_date):
     """Get backup manifest for a specific date"""
     try:
@@ -77,7 +73,6 @@ def get_backup_manifest(s3_bucket, backup_date):
     except Exception as e:
         logger.error(f"Failed to get backup manifest for {backup_date}: {str(e)}")
         return None
-
 
 def get_table_schema(table_name):
     """Get the schema of the original table for recreation"""
@@ -124,7 +119,6 @@ def get_table_schema(table_name):
         logger.error(f"Could not get schema for {table_name}: {str(e)}")
         return None
 
-
 def create_table_from_schema(table_name, schema):
     """Create a new table with the given schema"""
     try:
@@ -159,7 +153,6 @@ def create_table_from_schema(table_name, schema):
     except Exception as e:
         logger.error(f"Failed to create table {table_name}: {str(e)}")
         return False
-
 
 def list_export_data_files(s3_bucket, s3_prefix):
     """List all data files from a DynamoDB export"""
@@ -202,7 +195,6 @@ def list_export_data_files(s3_bucket, s3_prefix):
     except Exception as e:
         logger.error(f"Failed to list export data files: {str(e)}")
         return []
-
 
 def restore_data_from_export_file(s3_bucket, file_key, table_name, batch_size=25):
     """Restore data from a single export file"""
@@ -253,7 +245,6 @@ def restore_data_from_export_file(s3_bucket, file_key, table_name, batch_size=25
         logger.error(f"Failed to restore data from {file_key}: {str(e)}")
         return 0
 
-
 def convert_ddb_json_to_item(ddb_item):
     """Convert DynamoDB JSON format to regular Python dict"""
     converted_item = {}
@@ -289,7 +280,6 @@ def convert_ddb_json_to_item(ddb_item):
             converted_item[key] = value
 
     return converted_item
-
 
 def restore_table_from_export(s3_bucket, export_info, target_table_name, original_table_name):
     """Restore a complete table from DynamoDB export"""
@@ -364,7 +354,6 @@ def restore_table_from_export(s3_bucket, export_info, target_table_name, origina
             'error': str(e),
             'items_restored': 0
         }
-
 
 def lambda_handler(event, context):
     """Main disaster recovery handler"""
