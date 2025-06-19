@@ -21,7 +21,7 @@ variable "aws_region" {
 variable "dynamodb_tables" {
   description = "List of DynamoDB table suffixes to backup"
   type        = list(string)
-  default     = ["u2f_global", "totp_global", "api-key_global"]
+  default     = ["u2f", "totp", "api-key"]
 }
 
 variable "backup_retention_days" {

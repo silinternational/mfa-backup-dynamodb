@@ -1,3 +1,4 @@
+# Daily backup lambda function
 import json
 import boto3
 import os
@@ -29,7 +30,25 @@ def get_account_id():
         return sts.get_caller_identity()['Account']
     except Exception as e:
         logger.error(f"Failed to get account ID: {str(e)}")
-        return os.environ.get('AWS_ACCOUNT_ID', '123456789012')
+        raise
+
+
+def get_tables_to_backup():
+    """Get the list of tables to backup from Terraform environment variables"""
+    # Parse table names directly from Terraform
+    try:
+        tables_json = os.environ['DYNAMODB_TABLES']
+        tables = json.loads(tables_json)
+
+        logger.info(f"Tables from Terraform: {tables}")
+        return tables
+
+    except KeyError:
+        logger.error("DYNAMODB_TABLES environment variable not found")
+        raise Exception("DYNAMODB_TABLES environment variable is required")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse DYNAMODB_TABLES: {e}")
+        raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
 
 
 def generate_export_prefix(table_name, backup_date):
@@ -154,7 +173,7 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
     return completed_exports
 
 
-def create_export_manifest(completed_exports, backup_date, s3_bucket):
+def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
     """Create a manifest file with export details"""
     total_exports = len(completed_exports)
     successful_exports = len([e for e in completed_exports if e['status'] == 'COMPLETED'])
@@ -164,6 +183,7 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket):
 
     manifest = {
         'backup_date': backup_date,
+        'environment': environment,
         'backup_type': 'DYNAMODB_NATIVE_EXPORT',
         'created_at': datetime.now(timezone.utc).isoformat(),
         'total_exports': total_exports,
@@ -186,6 +206,7 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket):
             ContentType='application/json',
             Metadata={
                 'backup_date': backup_date,
+                'environment': environment,
                 'backup_type': 'DYNAMODB_NATIVE_EXPORT',
                 'total_exports': str(total_exports),
                 'successful_exports': str(successful_exports)
@@ -209,20 +230,13 @@ def lambda_handler(event, context):
         backup_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         s3_bucket = os.environ['BACKUP_BUCKET']
         environment = os.environ['ENVIRONMENT']
-        table_prefix = os.environ['TABLE_PREFIX']
 
-        # Parse table list from environment
-        try:
-            dynamodb_tables = json.loads(os.environ.get('DYNAMODB_TABLES', '[]'))
-        except json.JSONDecodeError:
-            dynamodb_tables = ['u2f_global', 'totp_global', 'api-key_global']
+        logger.info(f"Backup configuration: environment={environment}, bucket={s3_bucket}, date={backup_date}")
 
-        # Build full table names
-        tables_to_backup = [
-            f"{table_prefix}{table_suffix}" for table_suffix in dynamodb_tables
-        ]
+        # Get tables from Terraform (no fallback)
+        tables_to_backup = get_tables_to_backup()
 
-        logger.info(f"Starting exports for tables: {tables_to_backup}")
+        logger.info(f"Starting exports for {len(tables_to_backup)} tables: {tables_to_backup}")
 
         # Phase 1: Start all exports
         export_results = []
@@ -231,7 +245,9 @@ def lambda_handler(event, context):
         for table_name in tables_to_backup:
             try:
                 # Check if table exists first
+                logger.info(f"Checking if table {table_name} exists...")
                 dynamodb.describe_table(TableName=table_name)
+                logger.info(f"Table {table_name} exists, proceeding with export")
 
                 # Start the export
                 result = start_table_export(table_name, s3_bucket, backup_date)
@@ -242,11 +258,12 @@ def lambda_handler(event, context):
                     export_arns.append(result['export_arn'])
 
             except dynamodb.exceptions.ResourceNotFoundException:
-                logger.warning(f"Table {table_name} not found, skipping...")
+                error_msg = f"Table {table_name} not found"
+                logger.error(error_msg)
                 export_results.append({
                     'table_name': table_name,
-                    'error': 'Table not found',
-                    'status': 'SKIPPED'
+                    'error': error_msg,
+                    'status': 'FAILED'
                 })
             except Exception as e:
                 logger.error(f"Failed to start export for table {table_name}: {str(e)}")
@@ -271,23 +288,22 @@ def lambda_handler(event, context):
                             break
 
         # Phase 3: Create export manifest
-        manifest_key = create_export_manifest(export_results, backup_date, s3_bucket)
+        manifest_key = create_export_manifest(export_results, backup_date, s3_bucket, environment)
 
         # Generate summary
         successful_exports = len([r for r in export_results if r.get('status') == 'COMPLETED'])
         failed_exports = len([r for r in export_results if r.get('status') in ['FAILED', 'UNKNOWN']])
-        skipped_exports = len([r for r in export_results if r.get('status') == 'SKIPPED'])
         total_items = sum(r.get('item_count', 0) for r in export_results if r.get('item_count'))
         total_size_mb = sum(r.get('billing_size_bytes', 0) for r in export_results if r.get('billing_size_bytes')) / (
                     1024 * 1024)
 
         summary = {
             'backup_date': backup_date,
+            'environment': environment,
             'backup_type': 'DYNAMODB_NATIVE_EXPORT',
             'total_tables_processed': len(export_results),
             'successful_exports': successful_exports,
             'failed_exports': failed_exports,
-            'skipped_exports': skipped_exports,
             'total_items_exported': total_items,
             'total_size_mb': round(total_size_mb, 2),
             'manifest_s3_key': manifest_key,
@@ -295,8 +311,7 @@ def lambda_handler(event, context):
             'export_results': export_results
         }
 
-        logger.info(
-            f"Backup completed: {successful_exports} successful, {failed_exports} failed, {skipped_exports} skipped")
+        logger.info(f"Backup completed: {successful_exports} successful, {failed_exports} failed")
 
         # Determine response status
         if failed_exports > 0 and successful_exports == 0:
@@ -318,6 +333,7 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps({
                 'error': str(e),
+                'environment': os.environ.get('ENVIRONMENT', 'unknown'),
                 'backup_date': datetime.now(timezone.utc).strftime('%Y-%m-%d')
             })
         }

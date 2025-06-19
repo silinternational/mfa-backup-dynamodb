@@ -13,7 +13,7 @@ locals {
 
   # Table names matching your actual pattern: mfa-api_ENV_TABLE_global
   table_names = [
-    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}"
+    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"
   ]
 }
 
@@ -173,18 +173,18 @@ resource "aws_lambda_function" "daily_backup" {
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
   timeout          = var.lambda_timeout
-  memory_size      = 512 # Increased for better performance
+  memory_size      = 512
   source_code_hash = data.archive_file.daily_backup.output_base64sha256
   tags             = local.common_tags
 
   environment {
     variables = {
-      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT   = var.environment
-      # Pass the actual table names, not constructed ones
+      # Required environment variables (no fallbacks)
+      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT     = var.environment
+      AWS_REGION      = data.aws_region.current.name
+      # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
-      TABLE_PREFIX    = "mfa-api_${var.environment}_"
-      # Remove TABLE_PREFIX since we're using full table names
     }
   }
 
