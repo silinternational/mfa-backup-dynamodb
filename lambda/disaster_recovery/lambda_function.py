@@ -24,6 +24,23 @@ def decimal_default(obj):
     raise TypeError
 
 
+def get_tables_to_restore():
+    """Get the list of tables to restore from environment variables"""
+    try:
+        tables_json = os.environ['DYNAMODB_TABLES']
+        tables = json.loads(tables_json)
+
+        logger.info(f"Tables from Terraform: {tables}")
+        return tables
+
+    except KeyError:
+        logger.error("DYNAMODB_TABLES environment variable not found")
+        raise Exception("DYNAMODB_TABLES environment variable is required")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse DYNAMODB_TABLES: {e}")
+        raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
+
+
 def get_available_backups(s3_bucket):
     """Get list of available backup dates"""
     try:
@@ -35,7 +52,7 @@ def get_available_backups(s3_bucket):
 
         dates = []
         for prefix in response.get('CommonPrefixes', []):
-            # Extract date from prefix like 'native-exports/2024-01-15/'
+            # Extract date from prefix like 'native-exports/2025-06-19/'
             match = re.search(r'native-exports/(\d{4}-\d{2}-\d{2})/', prefix['Prefix'])
             if match:
                 dates.append(match.group(1))
@@ -162,7 +179,7 @@ def list_export_data_files(s3_bucket, s3_prefix):
             logger.error(f"No export directories found under {s3_prefix}")
             return []
 
-        # Use the first export directory
+        # Use the first export directory (there should only be one)
         export_dir = export_dirs[0]
         data_prefix = f"{export_dir}data/"
 
@@ -335,7 +352,7 @@ def restore_table_from_export(s3_bucket, export_info, target_table_name, origina
             'target_table_name': target_table_name,
             'items_restored': total_items_restored,
             'data_files_processed': len(data_files),
-            'export_date': export_info.get('backup_date', 'unknown'),
+            'export_date': export_info.get('export_time', 'unknown'),
             'export_arn': export_info.get('export_arn', 'unknown')
         }
 
@@ -356,35 +373,40 @@ def lambda_handler(event, context):
     try:
         # Parse input parameters
         backup_date = event.get('backup_date', 'latest')
-        tables_to_restore = event.get('tables', [])
+        specific_tables = event.get('tables', [])  # Specific tables to restore
         target_suffix = event.get('target_suffix', '_restored')
         dry_run = event.get('dry_run', False)
 
         s3_bucket = os.environ['BACKUP_BUCKET']
         environment = os.environ['ENVIRONMENT']
-        table_prefix = os.environ['TABLE_PREFIX']
 
-        # Parse table list from environment if not specified
-        if not tables_to_restore:
-            try:
-                dynamodb_tables = json.loads(os.environ.get('DYNAMODB_TABLES', '[]'))
-                tables_to_restore = [
-                    f"{table_prefix}{table_suffix}" for table_suffix in dynamodb_tables
-                ]
-            except json.JSONDecodeError:
-                tables_to_restore = [
-                    f"{table_prefix}u2f_global",
-                    f"{table_prefix}totp_global",
-                    f"{table_prefix}api-key_global"
-                ]
+        logger.info(f"Configuration: environment={environment}, bucket={s3_bucket}, backup_date={backup_date}")
 
-        logger.info(f"Disaster recovery for tables: {tables_to_restore}")
+        # Get tables from Terraform environment variables
+        all_available_tables = get_tables_to_restore()
+
+        # Use specific tables if provided, otherwise use all available tables
+        if specific_tables:
+            # Validate that specified tables are in our available list
+            tables_to_restore = []
+            for table in specific_tables:
+                if table in all_available_tables:
+                    tables_to_restore.append(table)
+                else:
+                    logger.warning(f"Requested table {table} not in available tables list")
+
+            if not tables_to_restore:
+                raise Exception("None of the specified tables are available for restoration")
+        else:
+            tables_to_restore = all_available_tables
+
+        logger.info(f"📋 Disaster recovery for tables: {tables_to_restore}")
 
         # If backup_date is 'latest', find the most recent backup
         if backup_date == 'latest':
             available_backups = get_available_backups(s3_bucket)
             if not available_backups:
-                raise Exception("No backups found")
+                raise Exception("No backups found in S3")
             backup_date = available_backups[0]
             logger.info(f"Using latest backup from: {backup_date}")
 
@@ -393,25 +415,46 @@ def lambda_handler(event, context):
         if not manifest:
             raise Exception(f"Could not find backup manifest for {backup_date}")
 
-        # Filter exports for requested tables
-        available_exports = {
-            export['table_name']: export
-            for export in manifest.get('exports', [])
-            if export.get('status') == 'COMPLETED'
-        }
+        # Filter exports for requested tables - only successful exports
+        available_exports = {}
+        for export in manifest.get('exports', []):
+            if export.get('status') == 'COMPLETED' and export.get('table_name') in tables_to_restore:
+                available_exports[export['table_name']] = export
 
         logger.info(f"Available exports for {backup_date}: {list(available_exports.keys())}")
 
         if dry_run:
-            logger.info("DRY RUN MODE - No actual restoration will be performed")
+            logger.info("🔍 DRY RUN MODE - No actual restoration will be performed")
+
+            # Check which tables would be restored
+            tables_that_can_be_restored = []
+            tables_missing_exports = []
+
+            for table_name in tables_to_restore:
+                if table_name in available_exports:
+                    tables_that_can_be_restored.append({
+                        'table_name': table_name,
+                        'target_table_name': f"{table_name}{target_suffix}",
+                        'export_arn': available_exports[table_name].get('export_arn', 'unknown'),
+                        'item_count': available_exports[table_name].get('item_count', 0)
+                    })
+                else:
+                    tables_missing_exports.append(table_name)
 
             dry_run_summary = {
                 'dry_run': True,
                 'backup_date': backup_date,
-                'tables_to_restore': tables_to_restore,
-                'available_exports': list(available_exports.keys()),
+                'environment': environment,
+                'tables_requested': tables_to_restore,
+                'tables_that_can_be_restored': tables_that_can_be_restored,
+                'tables_missing_exports': tables_missing_exports,
                 'target_suffix': target_suffix,
-                'manifest': manifest
+                'total_items_to_restore': sum(t.get('item_count', 0) for t in tables_that_can_be_restored),
+                'manifest_summary': {
+                    'backup_type': manifest.get('backup_type'),
+                    'total_exports': manifest.get('total_exports'),
+                    'successful_exports': manifest.get('successful_exports')
+                }
             }
 
             return {
@@ -424,16 +467,18 @@ def lambda_handler(event, context):
 
         for table_name in tables_to_restore:
             if table_name not in available_exports:
-                logger.warning(f"No export found for table {table_name}")
+                logger.warning(f"No successful export found for table {table_name}")
                 restore_results.append({
                     'table_name': table_name,
-                    'error': 'No export found for this table',
+                    'error': 'No successful export found for this table',
                     'items_restored': 0
                 })
                 continue
 
             # Determine target table name
             target_table_name = f"{table_name}{target_suffix}"
+
+            logger.info(f"🔄 Restoring {table_name} → {target_table_name}")
 
             # Restore the table
             export_info = available_exports[table_name]
@@ -447,15 +492,22 @@ def lambda_handler(event, context):
 
         summary = {
             'backup_date': backup_date,
+            'environment': environment,
             'restore_type': 'DYNAMODB_NATIVE_EXPORT',
+            'tables_requested': len(tables_to_restore),
             'successful_restores': successful_restores,
             'failed_restores': failed_restores,
             'total_items_restored': total_items,
             'target_suffix': target_suffix,
-            'restore_results': restore_results
+            'restore_results': restore_results,
+            'manifest_info': {
+                'backup_type': manifest.get('backup_type'),
+                'created_at': manifest.get('created_at')
+            }
         }
 
-        logger.info(f"Disaster recovery completed: {successful_restores} successful, {failed_restores} failed")
+        logger.info(
+            f"Disaster recovery completed: {successful_restores} successful, {failed_restores} failed, {total_items} items restored")
 
         # Determine response status
         if failed_restores > 0 and successful_restores == 0:
@@ -476,6 +528,7 @@ def lambda_handler(event, context):
         return {
             'statusCode': 500,
             'body': json.dumps({
-                'error': str(e)
+                'error': str(e),
+                'environment': os.environ.get('ENVIRONMENT', 'unknown')
             })
         }
