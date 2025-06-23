@@ -107,7 +107,6 @@ def start_table_export(table_name, s3_bucket, backup_date):
             'status': 'FAILED'
         }
 
-
 def check_export_status(export_arn):
     """Check the status of a DynamoDB export"""
     try:
@@ -141,7 +140,6 @@ def check_export_status(export_arn):
             'status': 'UNKNOWN',
             'error': str(e)
         }
-
 
 def wait_for_exports_completion(export_arns, max_wait_time=840):
     """Monitor multiple exports until completion or timeout"""
@@ -179,7 +177,6 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
         logger.warning(f"Export monitoring timed out: {export_arn}")
 
     return completed_exports
-
 
 def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
     """Create a manifest file with export details"""
@@ -227,7 +224,6 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
     except Exception as e:
         logger.error(f"Failed to create export manifest: {str(e)}")
         return None
-
 
 def lambda_handler(event, context):
     """Main Lambda handler for DynamoDB native exports"""

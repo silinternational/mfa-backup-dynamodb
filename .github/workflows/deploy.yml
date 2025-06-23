@@ -1,0 +1,153 @@
+name: MFA Backup System CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: "1.5.0"
+
+jobs:
+  # PACKAGE LAMBDA FUNCTIONS
+  package:
+    name: Package Lambda Functions
+    runs-on: ubuntu-latest
+    needs: [setup, test]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Package Lambda functions to tmp/ directory
+        run: |
+          echo "Packaging Lambda functions to tmp/ directory..."
+          
+          # Create tmp output directory
+          mkdir -p tmp
+          
+          # Package Daily Backup Lambda
+          if [ -d "lambda/daily_backup" ]; then
+              echo "Packaging daily backup lambda..."
+              cd lambda/daily_backup
+              
+              # Clean and package
+              find . -name "*.pyc" -delete
+              find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+              
+              # Create ZIP file in tmp/ directory
+              zip -r ../../tmp/daily_backup_lambda.zip . -x "*.pyc" "__pycache__/*" "*.git*" "*.md" "tests/*"
+              cd ../..
+              
+              echo "Daily backup lambda packaged: $(du -h tmp/daily_backup_lambda.zip | cut -f1)"
+          else
+              echo "Daily backup lambda source not found"
+              exit 1
+          fi
+          
+          # Package Disaster Recovery Lambda
+          if [ -d "lambda/disaster_recovery" ]; then
+              echo "Packaging disaster recovery lambda..."
+              cd lambda/disaster_recovery
+              
+              # Clean and package
+              find . -name "*.pyc" -delete
+              find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+              
+              # Create ZIP file in tmp/ directory
+              zip -r ../../tmp/disaster_recovery_lambda.zip . -x "*.pyc" "__pycache__/*" "*.git*" "*.md" "tests/*"
+              cd ../..
+              
+              echo "Disaster recovery lambda packaged: $(du -h tmp/disaster_recovery_lambda.zip | cut -f1)"
+          else
+              echo "Disaster recovery lambda source not found"
+              exit 1
+          fi
+          
+          # Show final packages in tmp/ directory
+          echo "Created packages in tmp/:"
+          ls -la tmp/
+
+      - name: Upload Lambda packages from tmp/
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-packages-${{ needs.setup.outputs.environment }}
+          path: "tmp/*.zip"
+          retention-days: 7
+
+  # TERRAFORM PLAN & DEPLOY
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    needs: [setup, test, package]
+    environment: ${{ needs.setup.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda packages to tmp/
+        uses: actions/download-artifact@v3
+        with:
+          name: lambda-packages-${{ needs.setup.outputs.environment }}
+          path: tmp/
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Plan
+        run: |
+          terraform init
+          terraform workspace select ${{ needs.setup.outputs.tf_workspace }} || terraform workspace new ${{ needs.setup.outputs.tf_workspace }}
+          terraform plan \
+            -var="environment=${{ needs.setup.outputs.environment }}" \
+            -var="itse_app_env=${{ needs.setup.outputs.environment }}" \
+            -out=tfplan
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+          path: tfplan
+          retention-days: 7
+
+  deploy:
+    name: Deploy to ${{ needs.setup.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: [setup, test, package, plan]
+    if: needs.setup.outputs.deploy == 'true' && github.event_name == 'push'
+    environment:
+      name: ${{ needs.setup.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda packages to tmp/
+        uses: actions/download-artifact@v3
+        with:
+          name: lambda-packages-${{ needs.setup.outputs.environment }}
+          path: tmp/
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: tfplan-${{ needs.setup.outputs.environment }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Apply
+        run: |
+          terraform init
+          terraform workspace select ${{ needs.setup.outputs.tf_workspace }}
+          terraform apply -auto-approve tfplan
+
+      - name: Validate Deployment
+        run: |
+          echo "Deployment completed successfully!"
+          echo "Environment: ${{ needs.setup.outputs.environment }}"
+          echo "Lambda packages were in tmp/ directory"

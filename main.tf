@@ -68,6 +68,62 @@ resource "aws_s3_bucket_public_access_block" "mfa_backups" {
   restrict_public_buckets = true
 }
 
+# S3 bucket policy to allow DynamoDB service access for imports
+resource "aws_s3_bucket_policy" "mfa_backups" {
+  bucket = aws_s3_bucket.mfa_backups.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # Allow DynamoDB service to read objects for import
+      {
+        Sid    = "DynamoDBImportAccess"
+        Effect = "Allow"
+        Principal = {
+          Service = "dynamodb.amazonaws.com"
+        }
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.mfa_backups.arn,
+          "${aws_s3_bucket.mfa_backups.arn}/*"
+        ]
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      # Allow Lambda functions to access the bucket
+      {
+        Sid    = "LambdaAccess"
+        Effect = "Allow"
+        Principal = {
+          AWS = [
+            aws_iam_role.daily_backup_lambda_role.arn,
+            aws_iam_role.disaster_recovery_lambda_role.arn
+          ]
+        }
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:PutObject",
+          "s3:PutObjectAcl",
+          "s3:DeleteObject",
+          "s3:GetObjectVersion",
+          "s3:ListBucketVersions"
+        ]
+        Resource = [
+          aws_s3_bucket.mfa_backups.arn,
+          "${aws_s3_bucket.mfa_backups.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
 # S3 Lifecycle policy - Environment-specific retention
 resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
   bucket = aws_s3_bucket.mfa_backups.id
@@ -170,6 +226,7 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
     ]
   })
 }
+
 # Daily Backup Lambda Function
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
@@ -185,8 +242,8 @@ resource "aws_lambda_function" "daily_backup" {
   environment {
     variables = {
       # Required environment variables (no fallbacks)
-      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT     = var.environment
+      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT   = var.environment
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
     }
@@ -247,6 +304,7 @@ resource "aws_iam_role" "disaster_recovery_lambda_role" {
   })
 }
 
+# Enhanced disaster recovery Lambda policy with import permissions
 resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
   name = "mfa-disaster-recovery-lambda-policy-${var.environment}"
   role = aws_iam_role.disaster_recovery_lambda_role.id
@@ -263,6 +321,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
         ]
         Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
       },
+      # Table-specific DynamoDB permissions
       {
         Effect = "Allow"
         Action = [
@@ -272,23 +331,53 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "dynamodb:BatchWriteItem",
           "dynamodb:UpdateTable",
           "dynamodb:DeleteTable",
-          "dynamodb:ImportTable",
-          "dynamodb:DescribeImport"
+          "dynamodb:ListTables"
         ]
         Resource = [
           "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*"
         ]
       },
+      # Import operations require broader permissions (imports don't have table-specific ARNs)
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:ImportTable",
+          "dynamodb:DescribeImport",
+          "dynamodb:ListImports"
+        ]
+        Resource = "*"
+        Condition = {
+          StringLike = {
+            "dynamodb:table-name" = "mfa-api_${var.environment}_*"
+          }
+        }
+      },
+      # S3 permissions for reading backups
       {
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:GetObjectVersion",
+          "s3:ListBucketVersions"
         ]
         Resource = [
           aws_s3_bucket.mfa_backups.arn,
           "${aws_s3_bucket.mfa_backups.arn}/*"
         ]
+      },
+      # CloudWatch for monitoring import progress
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = "MFA/DisasterRecovery"
+          }
+        }
       }
     ]
   })

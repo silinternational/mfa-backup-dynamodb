@@ -389,7 +389,7 @@ def lambda_handler(event, context):
         else:
             tables_to_restore = all_available_tables
 
-        logger.info(f"📋 Disaster recovery for tables: {tables_to_restore}")
+        logger.info(f"Disaster recovery for tables: {tables_to_restore}")
 
         # If backup_date is 'latest', find the most recent backup
         if backup_date == 'latest':
@@ -413,7 +413,7 @@ def lambda_handler(event, context):
         logger.info(f"Available exports for {backup_date}: {list(available_exports.keys())}")
 
         if dry_run:
-            logger.info("🔍 DRY RUN MODE - No actual restoration will be performed")
+            logger.info("DRY RUN MODE - No actual restoration will be performed")
 
             # Check which tables would be restored
             tables_that_can_be_restored = []
@@ -467,7 +467,7 @@ def lambda_handler(event, context):
             # Determine target table name
             target_table_name = f"{table_name}{target_suffix}"
 
-            logger.info(f"🔄 Restoring {table_name} → {target_table_name}")
+            logger.info(f"Restoring {table_name} → {target_table_name}")
 
             # Restore the table
             export_info = available_exports[table_name]
