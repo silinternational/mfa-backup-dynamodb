@@ -189,7 +189,8 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "dynamodb:ExportTableToPointInTime",
           "dynamodb:DescribeExport",
           "dynamodb:DescribeTable",
-          "dynamodb:ListExports"
+          "dynamodb:ListExports",
+          "dynamodb:DescribeContinuousBackups"
         ]
         Resource = concat(
           # Table permissions
@@ -317,7 +318,9 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
-          "logs:PutLogEvents"
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
         ]
         Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
       },
@@ -331,13 +334,19 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "dynamodb:BatchWriteItem",
           "dynamodb:UpdateTable",
           "dynamodb:DeleteTable",
-          "dynamodb:ListTables"
+          "dynamodb:ListTables",
+          "dynamodb:DescribeContinuousBackups",
+          "dynamodb:UpdateContinuousBackups",
+          "dynamodb:ListTagsOfResource",
+          "dynamodb:TagResource",
+          "dynamodb:UntagResource"
+
         ]
         Resource = [
           "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*"
         ]
       },
-      # Import operations require broader permissions (imports don't have table-specific ARNs)
+      # DynamoDB Import Operations (requires Resource = "*")
       {
         Effect = "Allow"
         Action = [
@@ -346,12 +355,18 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "dynamodb:ListImports"
         ]
         Resource = "*"
-        Condition = {
-          StringLike = {
-            "dynamodb:table-name" = "mfa-api_${var.environment}_*"
-          }
-        }
       },
+      # Global Table Operations
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:DescribeGlobalTable",
+          "dynamodb:CreateGlobalTable",
+          "dynamodb:UpdateGlobalTable"
+        ]
+        Resource = "*"
+      },
+
       # S3 permissions for reading backups
       {
         Effect = "Allow"
