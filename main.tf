@@ -232,11 +232,12 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
   function_name    = "mfa-daily-backup-${var.environment}"
+  description      = "Backup Lambda-${var.environment}"
   role             = aws_iam_role.daily_backup_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
   timeout          = var.lambda_timeout
-  memory_size      = 512
+  memory_size      = 128
   source_code_hash = data.archive_file.daily_backup.output_base64sha256
   tags             = local.common_tags
 
@@ -402,11 +403,12 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
 resource "aws_lambda_function" "disaster_recovery" {
   filename         = data.archive_file.disaster_recovery.output_path
   function_name    = "mfa-disaster-recovery-${var.environment}"
+  description      = "Backup Lambda-${var.environment}"
   role             = aws_iam_role.disaster_recovery_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
   timeout          = var.lambda_timeout
-  memory_size      = 1024
+  memory_size      = 128
   source_code_hash = data.archive_file.disaster_recovery.output_base64sha256
   tags             = local.common_tags
 
