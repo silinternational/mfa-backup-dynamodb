@@ -58,6 +58,78 @@ def get_tables_to_restore():
         raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
 
 
+def enable_pitr_on_table(table_name, max_retries=3):
+    """Enable Point-in-Time Recovery on a table with retries"""
+    logger.info(f"Enabling PITR on table: {table_name}")
+
+    for attempt in range(max_retries):
+        try:
+            # Check current PITR status first
+            response = dynamodb.describe_continuous_backups(TableName=table_name)
+            pitr_status = response['ContinuousBackupsDescription']['PointInTimeRecoveryDescription'][
+                'PointInTimeRecoveryStatus']
+
+            if pitr_status == 'ENABLED':
+                logger.info(f"PITR already enabled on {table_name}")
+                return True, "PITR already enabled"
+
+            # Enable PITR
+            dynamodb.update_continuous_backups(
+                TableName=table_name,
+                PointInTimeRecoverySpecification={
+                    'PointInTimeRecoveryEnabled': True
+                }
+            )
+
+            logger.info(f"Successfully enabled PITR on {table_name}")
+            return True, "PITR enabled successfully"
+
+        except dynamodb.exceptions.ResourceNotFoundException:
+            logger.warning(f"Table {table_name} not found for PITR enablement (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(5)  # Brief wait before retry
+                continue
+            return False, "Table not found"
+
+        except dynamodb.exceptions.ResourceInUseException:
+            logger.warning(
+                f"Table {table_name} is busy, retrying PITR enablement (attempt {attempt + 1}/{max_retries})")
+            if attempt < max_retries - 1:
+                time.sleep(10)  # Wait before retry
+                continue
+            return False, "Table is busy, could not enable PITR"
+
+        except Exception as e:
+            logger.error(f"Failed to enable PITR on {table_name}: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(5)  # Brief wait before retry
+                continue
+            return False, f"PITR enablement failed: {str(e)}"
+
+    return False, "Max retries exceeded"
+
+
+def enable_pitr_on_completed_tables(import_results):
+    """Enable PITR on all successfully imported tables as operational policy"""
+    pitr_results = []
+
+    for result in import_results:
+        if result.get('import_status') == 'COMPLETED' and result.get('target_table_name'):
+            table_name = result['target_table_name']
+
+            # Table is already ACTIVE since import completed, enable PITR directly
+            # This applies operational policy (PITR) even though it's not in backup data
+            success, message = enable_pitr_on_table(table_name)
+            pitr_results.append({
+                'table_name': table_name,
+                'original_table': result.get('table_name'),
+                'pitr_enabled': success,
+                'pitr_message': message
+            })
+
+    return pitr_results
+
+
 def get_available_backups(s3_bucket):
     """Get list of available backup dates"""
     try:
@@ -363,12 +435,14 @@ def lambda_handler(event, context):
         specific_tables = event.get('tables', [])
         dry_run = event.get('dry_run', False)
         wait_for_completion = event.get('wait_for_completion', True)  # Default to waiting
+        enable_pitr = event.get('enable_pitr', True)  # Apply PITR as operational policy
 
         s3_bucket = os.environ['BACKUP_BUCKET']
         environment = os.environ['ENVIRONMENT']
 
         logger.info(f"Configuration: environment={environment}, bucket={s3_bucket}, backup_date={backup_date}")
-        logger.info(f"Options: wait_for_completion={wait_for_completion}")
+        logger.info(f"Options: wait_for_completion={wait_for_completion}, enable_pitr={enable_pitr}")
+        logger.info("Note: PITR is applied as operational policy, not restored from backup data")
 
         # Get tables from Terraform environment variables
         all_available_tables = get_tables_to_restore()
@@ -432,7 +506,8 @@ def lambda_handler(event, context):
                 'valid_tables_count': len([r for r in validation_results if r['export_valid']]),
                 'total_items_to_restore': sum(r.get('item_count', 0) for r in validation_results if r['export_valid']),
                 'wait_for_completion': wait_for_completion,
-                'note': "Tables will be created with '_restored' suffix. Set 'wait_for_completion': false to return immediately."
+                'enable_pitr': enable_pitr,
+                'note': "Tables will be created with '_restored' suffix. PITR will be enabled as operational policy (not from backup data). Set 'wait_for_completion': false to return immediately."
             }
 
             return {
@@ -493,6 +568,7 @@ def lambda_handler(event, context):
                 import_arns.append(result['import_arn'])
 
         # Monitor imports for completion if requested and we have imports running
+        pitr_results = []
         if wait_for_completion and import_arns:
             logger.info(f"Waiting for {len(import_arns)} imports to complete (timeout: 12 minutes)...")
             completed_imports = wait_for_imports_completion(import_arns)
@@ -507,8 +583,23 @@ def lambda_handler(event, context):
                             import_results[i].update(completed)
                             import_results[i]['items_restored'] = completed.get('imported_item_count', 0)
                             break
+
+            # Enable PITR on successfully imported tables if requested (operational policy)
+            if enable_pitr:
+                logger.info("Enabling PITR on successfully imported tables as operational policy...")
+                pitr_results = enable_pitr_on_completed_tables(import_results)
+
+                # Log PITR results
+                for pitr_result in pitr_results:
+                    if pitr_result['pitr_enabled']:
+                        logger.info(f"PITR enabled on {pitr_result['table_name']}")
+                    else:
+                        logger.warning(
+                            f"Failed to enable PITR on {pitr_result['table_name']}: {pitr_result['pitr_message']}")
         else:
             logger.info("Imports started, not waiting for completion")
+            if enable_pitr:
+                logger.info("PITR will not be enabled since wait_for_completion=False")
 
         # Generate summary
         successful_imports = len([r for r in import_results if r.get('import_status') == 'COMPLETED'])
@@ -522,10 +613,18 @@ def lambda_handler(event, context):
         completed_tables = []
         for result in import_results:
             if result.get('import_status') == 'COMPLETED':
+                # Find corresponding PITR status
+                pitr_status = "not_attempted"
+                for pitr_result in pitr_results:
+                    if pitr_result['table_name'] == result.get('target_table_name'):
+                        pitr_status = "enabled" if pitr_result['pitr_enabled'] else "failed"
+                        break
+
                 completed_tables.append({
                     'table_name': result.get('target_table_name'),
                     'original_table': result.get('table_name'),
-                    'items': result.get('items_restored', 0)
+                    'items': result.get('items_restored', 0),
+                    'pitr_enabled': pitr_status
                 })
 
         summary = {
@@ -539,9 +638,11 @@ def lambda_handler(event, context):
             'in_progress_imports': in_progress_imports,
             'total_items_restored': total_items,
             'waited_for_completion': wait_for_completion,
+            'pitr_enabled': enable_pitr,
             'completed_tables': completed_tables,
             'import_arns': import_arns,
             'import_results': import_results,
+            'pitr_results': pitr_results,
             'manifest_info': {
                 'backup_type': manifest.get('backup_type'),
                 'created_at': manifest.get('created_at')
@@ -552,6 +653,18 @@ def lambda_handler(event, context):
         if in_progress_imports > 0:
             summary['note'] = "Some imports are still running. Check DynamoDB console to monitor progress."
             summary['monitoring_command'] = "aws dynamodb describe-import --import-arn <import-arn>"
+            if enable_pitr:
+                summary['note'] += " PITR will need to be enabled manually after imports complete."
+
+        # PITR summary
+        if pitr_results:
+            pitr_enabled_count = len([r for r in pitr_results if r['pitr_enabled']])
+            pitr_failed_count = len([r for r in pitr_results if not r['pitr_enabled']])
+            summary['pitr_summary'] = {
+                'pitr_enabled_count': pitr_enabled_count,
+                'pitr_failed_count': pitr_failed_count,
+                'total_pitr_attempts': len(pitr_results)
+            }
 
         logger.info(
             f"Disaster recovery summary: {successful_imports} completed, {failed_imports} failed, {in_progress_imports} in progress")
@@ -559,7 +672,8 @@ def lambda_handler(event, context):
         if completed_tables:
             logger.info("Completed restored tables:")
             for table in completed_tables:
-                logger.info(f"  - {table['table_name']} ({table['items']} items)")
+                pitr_msg = f" (PITR: {table['pitr_enabled']})" if table['pitr_enabled'] != "not_attempted" else ""
+                logger.info(f"  - {table['table_name']} ({table['items']} items){pitr_msg}")
 
         if in_progress_imports > 0:
             logger.info(f"{in_progress_imports} imports still running in background")
