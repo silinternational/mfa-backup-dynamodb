@@ -57,9 +57,3 @@ output "disaster_recovery_log_group" {
   description = "CloudWatch log group for disaster recovery Lambda"
   value       = aws_cloudwatch_log_group.disaster_recovery_logs.name
 }
-
-# Sentry Configuration Status
-output "sentry_enabled" {
-  description = "Whether Sentry monitoring is enabled"
-  value       = var.sentry_dsn != "" ? true : false
-}
