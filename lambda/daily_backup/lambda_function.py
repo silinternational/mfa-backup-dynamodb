@@ -1,4 +1,4 @@
-# Daily backup lambda function
+# Daily backup lambda function with Sentry notifications
 import json
 import boto3
 import os
@@ -7,19 +7,164 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import logging
 
+# Sentry SDK for error tracking and notifications
+import sentry_sdk
+from sentry_sdk.integrations.aws_lambda import AwsLambdaIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+
 # Set up logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
+# Initialize Sentry
+def init_sentry():
+    """Initialize Sentry with proper configuration"""
+    sentry_dsn = os.environ.get('SENTRY_DSN')
+    environment = os.environ.get('ENVIRONMENT', 'unknown')
+
+    if sentry_dsn:
+        # Configure logging integration
+        sentry_logging = LoggingIntegration(
+            level=logging.INFO,  # Capture info and above as breadcrumbs
+            event_level=logging.ERROR  # Send errors as events
+        )
+
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            environment=environment,
+            integrations=[
+                AwsLambdaIntegration(timeout_warning=True),
+                sentry_logging,
+            ],
+            # Set traces_sample_rate to 1.0 to capture 100% of transactions for performance monitoring
+            traces_sample_rate=0.1,  # 10% sampling for performance
+            # Set release if available
+            release=os.environ.get('LAMBDA_VERSION', 'unknown'),
+            # Add tags for better filtering
+            before_send=lambda event, hint: add_sentry_context(event, hint),
+        )
+
+        # Set user context
+        sentry_sdk.set_user({
+            "id": "mfa-backup-system",
+            "username": "lambda-backup",
+        })
+
+        # Set additional tags
+        sentry_sdk.set_tag("service", "mfa-backup")
+        sentry_sdk.set_tag("component", "daily-export")
+
+        logger.info("Sentry initialized successfully")
+    else:
+        logger.warning("SENTRY_DSN not configured - error tracking disabled")
+
+
+def add_sentry_context(event, hint):
+    """Add additional context to Sentry events"""
+    if 'exc_info' in hint:
+        # Add custom context for exceptions
+        sentry_sdk.set_context("backup_operation", {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "environment": os.environ.get('ENVIRONMENT', 'unknown'),
+            "lambda_function": os.environ.get('AWS_LAMBDA_FUNCTION_NAME', 'unknown'),
+        })
+    return event
+
+
+def send_backup_failure_alert(failure_type, details, export_results=None):
+    """Send structured failure alert to Sentry"""
+
+    # Set additional context
+    sentry_sdk.set_context("backup_failure", {
+        "failure_type": failure_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_tables": len(export_results) if export_results else 0,
+        "details": details
+    })
+
+    # Add export results as extra context if available
+    if export_results:
+        failed_tables = [r for r in export_results if r.get('status') in ['FAILED', 'UNKNOWN']]
+        successful_tables = [r for r in export_results if r.get('status') == 'COMPLETED']
+
+        sentry_sdk.set_context("export_summary", {
+            "total_exports": len(export_results),
+            "successful_exports": len(successful_tables),
+            "failed_exports": len(failed_tables),
+            "failed_table_names": [t.get('table_name') for t in failed_tables],
+            "successful_table_names": [t.get('table_name') for t in successful_tables]
+        })
+
+        # Add individual failure details
+        for failed_export in failed_tables:
+            sentry_sdk.add_breadcrumb(
+                message=f"Table export failed: {failed_export.get('table_name')}",
+                data={
+                    "table_name": failed_export.get('table_name'),
+                    "error": failed_export.get('error', 'Unknown error'),
+                    "export_arn": failed_export.get('export_arn'),
+                    "failure_message": failed_export.get('failure_message')
+                },
+                level="error"
+            )
+
+    # Send the alert based on failure type
+    if failure_type == "COMPLETE_FAILURE":
+        sentry_sdk.capture_message(
+            f"CRITICAL: Complete MFA backup failure - All {len(export_results) if export_results else 0} table exports failed",
+            level="error"
+        )
+    elif failure_type == "PARTIAL_FAILURE":
+        failed_count = len([r for r in export_results if r.get('status') in ['FAILED', 'UNKNOWN']])
+        sentry_sdk.capture_message(
+            f"WARNING: Partial MFA backup failure - {failed_count} out of {len(export_results)} exports failed",
+            level="warning"
+        )
+    elif failure_type == "TIMEOUT_FAILURE":
+        sentry_sdk.capture_message(
+            f"TIMEOUT: MFA backup exports timed out - Check CloudWatch logs for details",
+            level="error"
+        )
+    elif failure_type == "CRITICAL_ERROR":
+        sentry_sdk.capture_exception()
+    else:
+        sentry_sdk.capture_message(f"Unknown backup failure: {details}", level="error")
+
+
+def send_backup_success_notification(export_results, backup_date, total_items, total_size_mb):
+    """Send success notification with summary"""
+    sentry_sdk.add_breadcrumb(
+        message="Daily MFA backup completed successfully",
+        data={
+            "backup_date": backup_date,
+            "total_tables": len(export_results),
+            "total_items_exported": total_items,
+            "total_size_mb": total_size_mb,
+            "successful_exports": len([r for r in export_results if r.get('status') == 'COMPLETED'])
+        },
+        level="info"
+    )
+
+    # Only send success message if explicitly configured (to avoid spam)
+    if os.environ.get('SENTRY_SEND_SUCCESS_NOTIFICATIONS', 'false').lower() == 'true':
+        sentry_sdk.capture_message(
+            f"Daily MFA backup completed successfully - {len(export_results)} tables, {total_items} items, {total_size_mb:.2f}MB",
+            level="info"
+        )
+
+
 # Initialize AWS clients
 dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
+
 
 def decimal_default(obj):
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
+
 
 def get_account_id():
     """Get AWS account ID"""
@@ -28,7 +173,9 @@ def get_account_id():
         return sts.get_caller_identity()['Account']
     except Exception as e:
         logger.error(f"Failed to get account ID: {str(e)}")
+        sentry_sdk.capture_exception()
         raise
+
 
 def get_region():
     """Get AWS region"""
@@ -41,6 +188,7 @@ def get_region():
         # Fallback to us-east-1 if region detection fails
         return 'us-east-1'
 
+
 def get_tables_to_backup():
     """Get the list of tables to backup from Terraform environment variables"""
     # Parse table names directly from Terraform
@@ -52,10 +200,14 @@ def get_tables_to_backup():
         return tables
 
     except KeyError:
-        logger.error("DYNAMODB_TABLES environment variable not found")
-        raise Exception("DYNAMODB_TABLES environment variable is required")
+        error_msg = "DYNAMODB_TABLES environment variable not found"
+        logger.error(error_msg)
+        sentry_sdk.capture_message(error_msg, level="error")
+        raise Exception(error_msg)
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse DYNAMODB_TABLES: {e}")
+        error_msg = f"Failed to parse DYNAMODB_TABLES: {e}"
+        logger.error(error_msg)
+        sentry_sdk.capture_exception()
         raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
 
 
@@ -91,6 +243,17 @@ def start_table_export(table_name, s3_bucket, backup_date):
 
         logger.info(f"Export started for {table_name}: {export_arn}")
 
+        # Add breadcrumb for successful export start
+        sentry_sdk.add_breadcrumb(
+            message=f"Export started for table {table_name}",
+            data={
+                "table_name": table_name,
+                "export_arn": export_arn,
+                "s3_prefix": s3_prefix
+            },
+            level="info"
+        )
+
         return {
             'table_name': table_name,
             'export_arn': export_arn,
@@ -100,12 +263,24 @@ def start_table_export(table_name, s3_bucket, backup_date):
         }
 
     except Exception as e:
-        logger.error(f"Failed to start export for table {table_name}: {str(e)}")
+        error_msg = f"Failed to start export for table {table_name}: {str(e)}"
+        logger.error(error_msg)
+
+        # Add context for this specific table failure
+        sentry_sdk.set_context("failed_table_export", {
+            "table_name": table_name,
+            "s3_bucket": s3_bucket,
+            "backup_date": backup_date,
+            "error": str(e)
+        })
+        sentry_sdk.capture_exception()
+
         return {
             'table_name': table_name,
             'error': str(e),
             'status': 'FAILED'
         }
+
 
 def check_export_status(export_arn):
     """Check the status of a DynamoDB export"""
@@ -131,15 +306,30 @@ def check_export_status(export_arn):
         if export_desc.get('EndTime'):
             result['end_time'] = export_desc['EndTime'].isoformat()
 
+        # Log failure details to Sentry
+        if result['status'] == 'FAILED' and result.get('failure_message'):
+            sentry_sdk.add_breadcrumb(
+                message=f"Export failed: {export_arn}",
+                data={
+                    "export_arn": export_arn,
+                    "failure_message": result['failure_message'],
+                    "table_arn": result.get('table_arn')
+                },
+                level="error"
+            )
+
         return result
 
     except Exception as e:
-        logger.error(f"Failed to check export status for {export_arn}: {str(e)}")
+        error_msg = f"Failed to check export status for {export_arn}: {str(e)}"
+        logger.error(error_msg)
+        sentry_sdk.capture_exception()
         return {
             'export_arn': export_arn,
             'status': 'UNKNOWN',
             'error': str(e)
         }
+
 
 def wait_for_exports_completion(export_arns, max_wait_time=840):
     """Monitor multiple exports until completion or timeout"""
@@ -147,6 +337,7 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
 
     start_time = time.time()
     completed_exports = []
+    timeout_occurred = False
 
     while export_arns and (time.time() - start_time) < max_wait_time:
         remaining_exports = []
@@ -170,13 +361,20 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
             time.sleep(30)  # Wait 30 seconds before checking again
 
     # Handle any remaining exports that didn't complete
-    for export_arn in export_arns:
-        status_info = check_export_status(export_arn)
-        status_info['timeout'] = True
-        completed_exports.append(status_info)
-        logger.warning(f"Export monitoring timed out: {export_arn}")
+    if export_arns:
+        timeout_occurred = True
+        for export_arn in export_arns:
+            status_info = check_export_status(export_arn)
+            status_info['timeout'] = True
+            completed_exports.append(status_info)
+            logger.warning(f"Export monitoring timed out: {export_arn}")
+
+    # Send timeout alert if needed
+    if timeout_occurred:
+        send_backup_failure_alert("TIMEOUT_FAILURE", f"Export monitoring timed out for {len(export_arns)} exports")
 
     return completed_exports
+
 
 def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
     """Create a manifest file with export details"""
@@ -222,20 +420,42 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
         return manifest_key
 
     except Exception as e:
-        logger.error(f"Failed to create export manifest: {str(e)}")
+        error_msg = f"Failed to create export manifest: {str(e)}"
+        logger.error(error_msg)
+        sentry_sdk.capture_exception()
         return None
+
 
 def lambda_handler(event, context):
     """Main Lambda handler for DynamoDB native exports"""
+    # Initialize Sentry first
+    init_sentry()
+
     logger.info("Starting MFA daily backup using DynamoDB native export")
 
     try:
+        # Set Lambda context in Sentry
+        sentry_sdk.set_context("lambda_context", {
+            "function_name": context.function_name,
+            "function_version": context.function_version,
+            "invoked_function_arn": context.invoked_function_arn,
+            "memory_limit_in_mb": context.memory_limit_in_mb,
+            "remaining_time_in_millis": context.get_remaining_time_in_millis()
+        })
+
         # Get configuration from environment
         backup_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         s3_bucket = os.environ['BACKUP_BUCKET']
         environment = os.environ['ENVIRONMENT']
 
         logger.info(f"Backup configuration: environment={environment}, bucket={s3_bucket}, date={backup_date}")
+
+        # Set backup context in Sentry
+        sentry_sdk.set_context("backup_config", {
+            "backup_date": backup_date,
+            "s3_bucket": s3_bucket,
+            "environment": environment
+        })
 
         # Get tables from Terraform (no fallback)
         tables_to_backup = get_tables_to_backup()
@@ -264,6 +484,10 @@ def lambda_handler(event, context):
             except dynamodb.exceptions.ResourceNotFoundException:
                 error_msg = f"Table {table_name} not found"
                 logger.error(error_msg)
+                sentry_sdk.add_breadcrumb(
+                    message=f"Table not found: {table_name}",
+                    level="error"
+                )
                 export_results.append({
                     'table_name': table_name,
                     'error': error_msg,
@@ -301,6 +525,21 @@ def lambda_handler(event, context):
         total_size_mb = sum(r.get('billing_size_bytes', 0) for r in export_results if r.get('billing_size_bytes')) / (
                     1024 * 1024)
 
+        # Send appropriate Sentry notifications based on results
+        if failed_exports > 0 and successful_exports == 0:
+            # Complete failure
+            send_backup_failure_alert("COMPLETE_FAILURE", "All table exports failed", export_results)
+            status_code = 500
+        elif failed_exports > 0:
+            # Partial failure
+            send_backup_failure_alert("PARTIAL_FAILURE",
+                                      f"{failed_exports} out of {len(export_results)} exports failed", export_results)
+            status_code = 207
+        else:
+            # Success
+            send_backup_success_notification(export_results, backup_date, total_items, total_size_mb)
+            status_code = 200
+
         summary = {
             'backup_date': backup_date,
             'environment': environment,
@@ -317,21 +556,17 @@ def lambda_handler(event, context):
 
         logger.info(f"Backup completed: {successful_exports} successful, {failed_exports} failed")
 
-        # Determine response status
-        if failed_exports > 0 and successful_exports == 0:
-            status_code = 500  # Complete failure
-        elif failed_exports > 0:
-            status_code = 207  # Multi-status (partial success)
-        else:
-            status_code = 200  # Success
-
         return {
             'statusCode': status_code,
             'body': json.dumps(summary, default=decimal_default)
         }
 
     except Exception as e:
-        logger.error(f"Critical error in backup process: {str(e)}")
+        error_msg = f"Critical error in backup process: {str(e)}"
+        logger.error(error_msg)
+
+        # Send critical error alert
+        send_backup_failure_alert("CRITICAL_ERROR", error_msg)
 
         return {
             'statusCode': 500,

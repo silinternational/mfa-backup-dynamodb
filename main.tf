@@ -232,7 +232,7 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
   function_name    = "mfa-daily-backup-${var.environment}"
-  description      = "Backup Lambda-${var.environment}"
+  description      = "Daily MFA Backup Lambda for ${var.environment} with Sentry monitoring"
   role             = aws_iam_role.daily_backup_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
@@ -248,6 +248,14 @@ resource "aws_lambda_function" "daily_backup" {
       ENVIRONMENT   = var.environment
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
+
+      # Sentry configuration for failure notifications
+      SENTRY_DSN     = var.sentry_dsn
+      LAMBDA_VERSION = var.lambda_version
+
+      # Service identification for Sentry
+      SERVICE_NAME   = "mfa-backup-system"
+      COMPONENT_NAME = "daily-backup"
     }
   }
 
@@ -264,27 +272,29 @@ resource "aws_cloudwatch_log_group" "daily_backup_logs" {
   tags              = local.common_tags
 }
 
-# EventBridge Rule for Daily Backup (different schedule for dev vs prod)
+# EventBridge Rule for Daily Backup (using your configured schedule)
 resource "aws_cloudwatch_event_rule" "daily_backup_schedule" {
-  name        = "mfa-daily-backup-schedule-${var.environment}"
-  description = "Trigger MFA backup daily for ${var.environment}"
-  # Different schedules: prod daily at 2 AM, dev at 3 AM
-  schedule_expression = var.environment == "prod" ? "cron(0 2 * * ? *)" : "cron(0 3 * * ? *)"
+  count               = var.backup_schedule_enabled ? 1 : 0
+  name                = "mfa-daily-backup-schedule-${var.environment}"
+  description         = "Trigger MFA backup daily for ${var.environment}"
+  schedule_expression = var.backup_schedule
   tags                = local.common_tags
 }
 
 resource "aws_cloudwatch_event_target" "daily_backup_target" {
-  rule      = aws_cloudwatch_event_rule.daily_backup_schedule.name
+  count     = var.backup_schedule_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.daily_backup_schedule[0].name
   target_id = "MFADailyBackupTarget"
   arn       = aws_lambda_function.daily_backup.arn
 }
 
 resource "aws_lambda_permission" "allow_eventbridge" {
+  count         = var.backup_schedule_enabled ? 1 : 0
   statement_id  = "AllowExecutionFromEventBridge"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.daily_backup.function_name
   principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.daily_backup_schedule.arn
+  source_arn    = aws_cloudwatch_event_rule.daily_backup_schedule[0].arn
 }
 
 # IAM Role for Disaster Recovery Lambda
@@ -403,7 +413,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
 resource "aws_lambda_function" "disaster_recovery" {
   filename         = data.archive_file.disaster_recovery.output_path
   function_name    = "mfa-disaster-recovery-${var.environment}"
-  description      = "Backup Lambda-${var.environment}"
+  description      = "MFA Disaster Recovery Lambda for ${var.environment} with Sentry monitoring"
   role             = aws_iam_role.disaster_recovery_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
@@ -419,6 +429,14 @@ resource "aws_lambda_function" "disaster_recovery" {
       # Pass the actual table names
       DYNAMODB_TABLES = jsonencode(local.table_names)
       TABLE_PREFIX    = "mfa-api_${var.environment}_"
+
+      # Sentry configuration for failure notifications
+      SENTRY_DSN     = var.sentry_dsn
+      LAMBDA_VERSION = var.lambda_version
+
+      # Service identification for Sentry
+      SERVICE_NAME   = "mfa-backup-system"
+      COMPONENT_NAME = "disaster-recovery"
     }
   }
 
