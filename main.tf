@@ -232,7 +232,7 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
   function_name    = "mfa-daily-backup-${var.environment}"
-  description      = "Daily MFA Backup Lambda for ${var.environment} with Sentry monitoring"
+  description      = "Daily MFA Backup Lambda for ${var.environment}"
   role             = aws_iam_role.daily_backup_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
@@ -413,7 +413,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
 resource "aws_lambda_function" "disaster_recovery" {
   filename         = data.archive_file.disaster_recovery.output_path
   function_name    = "mfa-disaster-recovery-${var.environment}"
-  description      = "MFA Disaster Recovery Lambda for ${var.environment} with Sentry monitoring"
+  description      = "MFA Disaster Recovery Lambda for ${var.environment}"
   role             = aws_iam_role.disaster_recovery_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
