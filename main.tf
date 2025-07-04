@@ -249,13 +249,6 @@ resource "aws_lambda_function" "daily_backup" {
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
 
-      # Sentry configuration for failure notifications
-      SENTRY_DSN     = var.sentry_dsn
-      LAMBDA_VERSION = var.lambda_version
-
-      # Service identification for Sentry
-      SERVICE_NAME   = "mfa-backup-system"
-      COMPONENT_NAME = "daily-backup"
     }
   }
 
@@ -413,7 +406,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
 resource "aws_lambda_function" "disaster_recovery" {
   filename         = data.archive_file.disaster_recovery.output_path
   function_name    = "mfa-disaster-recovery-${var.environment}"
-  description      = "MFA Disaster Recovery Lambda for ${var.environment}"
+  description      = "MFA Disaster Recovery Lambda for ${var.environment} "
   role             = aws_iam_role.disaster_recovery_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
   runtime          = "python3.11"
@@ -430,13 +423,6 @@ resource "aws_lambda_function" "disaster_recovery" {
       DYNAMODB_TABLES = jsonencode(local.table_names)
       TABLE_PREFIX    = "mfa-api_${var.environment}_"
 
-      # Sentry configuration for failure notifications
-      SENTRY_DSN     = var.sentry_dsn
-      LAMBDA_VERSION = var.lambda_version
-
-      # Service identification for Sentry
-      SERVICE_NAME   = "mfa-backup-system"
-      COMPONENT_NAME = "disaster-recovery"
     }
   }
 

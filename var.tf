@@ -45,11 +45,11 @@ variable "backup_schedule" {
 
 # New variables for enhanced functionality
 
-variable "lambda_version" {
+/*variable "lambda_version" {
   description = "Version identifier for Lambda functions (used in Sentry releases)"
   type        = string
   default     = "1.0.0"
-}
+}*/
 
 variable "backup_schedule_enabled" {
   description = "Enable or disable the automatic backup schedule (useful for maintenance or cost control)"
@@ -57,9 +57,9 @@ variable "backup_schedule_enabled" {
   default     = true
 }
 
-variable "sentry_dsn" {
+/*variable "sentry_dsn" {
   description = "Sentry DSN for error tracking and failure notifications (leave empty to disable Sentry)"
   type        = string
   default     = "https://e6fb6aef4d4155af1043304eb4fb0eed@o4504843027480576.ingest.us.sentry.io/4509571683975168"
   sensitive   = true
-}
+}*/
