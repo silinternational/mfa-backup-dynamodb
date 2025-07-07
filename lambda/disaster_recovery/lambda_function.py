@@ -37,9 +37,13 @@ def validate_environment():
     if missing_vars:
         raise Exception(f"Missing required environment variables: {', '.join(missing_vars)}")
 
+    # Get S3 prefix from environment or use default
+    s3_prefix = os.environ.get('S3_EXPORTS_PREFIX', 'native-exports')  # Changed default to native-exports
+
     return {
         'backup_bucket': os.environ['BACKUP_BUCKET'],
-        'environment': os.environ['ENVIRONMENT']
+        'environment': os.environ['ENVIRONMENT'],
+        's3_prefix': s3_prefix
     }
 
 
@@ -65,17 +69,17 @@ def get_tables_to_restore():
         raise
 
 
-def get_available_backups(s3_bucket):
+def get_available_backups(s3_bucket, s3_prefix='native-exports'):
     """
     Get list of available backup dates from S3
     Returns dates in descending order (newest first)
     """
     try:
-        logger.info(f"Scanning for backups in s3://{s3_bucket}/exports/")
+        logger.info(f"Scanning for backups in s3://{s3_bucket}/{s3_prefix}/")
 
         response = s3.list_objects_v2(
             Bucket=s3_bucket,
-            Prefix='exports/',
+            Prefix=f'{s3_prefix}/',
             Delimiter='/'
         )
 
@@ -83,7 +87,7 @@ def get_available_backups(s3_bucket):
         date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')  # YYYY-MM-DD format
 
         for prefix in response.get('CommonPrefixes', []):
-            # Extract date from prefix like 'exports/2025-01-15/'
+            # Extract date from prefix like 'native-exports/2025-07-02/'
             path_parts = prefix['Prefix'].rstrip('/').split('/')
             if len(path_parts) >= 2:
                 date_part = path_parts[-1]
@@ -91,16 +95,16 @@ def get_available_backups(s3_bucket):
                     backup_dates.append(date_part)
 
         if not backup_dates:
-            logger.warning("No backup dates found in expected format (YYYY-MM-DD)")
+            logger.warning(f"No backup dates found in expected format (YYYY-MM-DD) under {s3_prefix}/")
 
             # Try to list what's actually there for debugging
             response = s3.list_objects_v2(
                 Bucket=s3_bucket,
-                Prefix='exports/',
+                Prefix=f'{s3_prefix}/',
                 MaxKeys=10
             )
 
-            logger.info("Available objects under exports/:")
+            logger.info(f"Available objects under {s3_prefix}/:")
             for obj in response.get('Contents', []):
                 logger.info(f"  {obj['Key']}")
 
@@ -115,12 +119,12 @@ def get_available_backups(s3_bucket):
         raise
 
 
-def get_backup_manifest(s3_bucket, backup_date):
+def get_backup_manifest(s3_bucket, backup_date, s3_prefix='native-exports'):
     """
     Get backup manifest for a specific date
     """
     try:
-        manifest_key = f"exports/{backup_date}/manifest.json"
+        manifest_key = f"{s3_prefix}/{backup_date}/manifest.json"
 
         logger.info(f"Fetching manifest: s3://{s3_bucket}/{manifest_key}")
 
@@ -139,14 +143,14 @@ def get_backup_manifest(s3_bucket, backup_date):
             if not isinstance(manifest['exports'], list):
                 raise ValueError("Manifest 'exports' field is not a list")
 
-            logger.info(f"Found valid manifest with {len(manifest.get('exports', []))} exports")
+            logger.info(f" Found valid manifest with {len(manifest.get('exports', []))} exports")
             return manifest
 
         except s3.exceptions.NoSuchKey:
-            logger.error(f"Manifest not found: {manifest_key}")
+            logger.error(f" Manifest not found: {manifest_key}")
             return None
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in manifest: {str(e)}")
+            logger.error(f" Invalid JSON in manifest: {str(e)}")
             return None
 
     except Exception as e:
@@ -228,7 +232,7 @@ def get_export_data_files(s3_bucket, export_info):
                             data_files.append(obj['Key'])
 
                     if data_files:
-                        logger.info(f"Found {len(data_files)} data files in {data_path}")
+                        logger.info(f" Found {len(data_files)} data files in {data_path}")
                         return data_files
 
         except Exception as e:
@@ -246,7 +250,7 @@ def get_export_data_files(s3_bucket, export_info):
                     data_files.append(obj['Key'])
 
             if data_files:
-                logger.info(f"Found {len(data_files)} data files directly under {s3_prefix}")
+                logger.info(f" Found {len(data_files)} data files directly under {s3_prefix}")
                 return data_files
 
         except Exception as e:
@@ -266,14 +270,14 @@ def get_export_data_files(s3_bucket, export_info):
                         data_files.append(obj['Key'])
 
             if data_files:
-                logger.info(f"Found {len(data_files)} data files via recursive search")
+                logger.info(f" Found {len(data_files)} data files via recursive search")
                 return data_files
 
         except Exception as e:
             logger.warning(f"Recursive search failed: {str(e)}")
 
         # If we get here, no files were found
-        logger.error(f"No data files found for {table_name} under any search strategy")
+        logger.error(f" No data files found for {table_name} under any search strategy")
 
         # List what's actually there for debugging
         try:
@@ -285,7 +289,7 @@ def get_export_data_files(s3_bucket, export_info):
 
             logger.info(f"Debug: Contents under {s3_prefix}/:")
             for obj in response.get('Contents', []):
-                logger.info(f" {obj['Key']}")
+                logger.info(f"   {obj['Key']}")
 
         except Exception:
             pass
@@ -346,7 +350,7 @@ def clear_existing_table_data(table_name, preserve_schema=True):
     WARNING: This deletes all existing data!
     """
     try:
-        logger.warning(f"CLEARING ALL DATA from table: {table_name}")
+        logger.warning(f" CLEARING ALL DATA from table: {table_name}")
 
         # Get table schema
         response = dynamodb.describe_table(TableName=table_name)
@@ -427,11 +431,11 @@ def clear_existing_table_data(table_name, preserve_schema=True):
             if batch_count % 10 == 0:
                 logger.info(f"Deletion progress: ~{items_deleted} items deleted...")
 
-        logger.info(f"Successfully cleared {items_deleted} items from {table_name}")
+        logger.info(f" Successfully cleared {items_deleted} items from {table_name}")
         return True, items_deleted
 
     except Exception as e:
-        logger.error(f"Failed to clear table data: {str(e)}")
+        logger.error(f" Failed to clear table data: {str(e)}")
         return False, 0
 
 
@@ -636,6 +640,7 @@ def lambda_handler(event, context):
         env_config = validate_environment()
         s3_bucket = env_config['backup_bucket']
         environment = env_config['environment']
+        s3_prefix = env_config['s3_prefix']  # Will be 'native-exports' by default
 
         # Parse input parameters
         backup_date = event.get('backup_date', 'latest')
@@ -647,6 +652,7 @@ def lambda_handler(event, context):
         logger.info(f"📋 Configuration:")
         logger.info(f"  Environment: {environment}")
         logger.info(f"  S3 Bucket: {s3_bucket}")
+        logger.info(f"  S3 Prefix: {s3_prefix}")  # Log the S3 prefix being used
         logger.info(f"  Backup Date: {backup_date}")
         logger.info(f"  Specific Tables: {specific_tables or 'All available'}")
         logger.info(f"  Dry Run: {dry_run}")
@@ -675,14 +681,14 @@ def lambda_handler(event, context):
 
         # Get backup date if 'latest'
         if backup_date == 'latest':
-            available_backups = get_available_backups(s3_bucket)
+            available_backups = get_available_backups(s3_bucket, s3_prefix)
             if not available_backups:
-                raise Exception("No backups found in S3")
+                raise Exception(f"No backups found in s3://{s3_bucket}/{s3_prefix}/")
             backup_date = available_backups[0]
             logger.info(f" Using latest backup from: {backup_date}")
 
         # Get and validate backup manifest
-        manifest = get_backup_manifest(s3_bucket, backup_date)
+        manifest = get_backup_manifest(s3_bucket, backup_date, s3_prefix)
         if not manifest:
             raise Exception(f"Could not find or parse backup manifest for {backup_date}")
 
@@ -739,6 +745,7 @@ def lambda_handler(event, context):
                             'expected_items': export_info.get('item_count', 0),
                             'data_files_count': len(data_files),
                             'estimated_size_mb': round(total_file_size / 1024 / 1024, 2),
+                            's3_prefix_used': export_info.get('s3_prefix', 'unknown'),
                             'restore_options': {
                                 'clear_existing_data': clear_existing_data,
                                 'max_workers': max_workers
@@ -761,6 +768,8 @@ def lambda_handler(event, context):
                 'dry_run': True,
                 'backup_date': backup_date,
                 'environment': environment,
+                's3_bucket': s3_bucket,
+                's3_prefix': s3_prefix,
                 'restore_type': 'BATCH_WRITE_FROM_S3_TO_EXISTING_TABLES',
                 'tables_requested': len(tables_to_restore),
                 'validation_results': validation_results,
@@ -786,7 +795,7 @@ def lambda_handler(event, context):
 
         for table_name in tables_to_restore:
             if table_name not in available_exports:
-                logger.warning(f" Skipping {table_name} - no valid export found")
+                logger.warning(f"Skipping {table_name} - no valid export found")
                 restore_results.append({
                     'table_name': table_name,
                     'restore_type': 'BATCH_WRITE_FROM_S3',
@@ -827,6 +836,8 @@ def lambda_handler(event, context):
         summary = {
             'backup_date': backup_date,
             'environment': environment,
+            's3_bucket': s3_bucket,
+            's3_prefix': s3_prefix,
             'restore_type': 'BATCH_WRITE_FROM_S3_TO_EXISTING_TABLES',
             'duration_seconds': int(duration.total_seconds()),
             'tables_requested': len(tables_to_restore),
@@ -845,7 +856,7 @@ def lambda_handler(event, context):
         }
 
         # Log summary
-        logger.info(f" Batch write restore completed in {duration}")
+        logger.info(f"🏁 Batch write restore completed in {duration}")
         logger.info(
             f"📊 Results: {successful_restores} completed, {partial_restores} partial, {failed_restores} failed, {skipped_restores} skipped")
         logger.info(f"📈 Total items: {total_items_written}/{total_items_processed} written")
@@ -867,12 +878,14 @@ def lambda_handler(event, context):
         end_time = datetime.now()
         duration = end_time - start_time
 
-        logger.error(f" Critical error in batch write restore after {duration}: {str(e)}")
+        logger.error(f"Critical error in batch write restore after {duration}: {str(e)}")
 
         error_response = {
             'error': str(e),
             'restore_type': 'BATCH_WRITE_FROM_S3',
             'environment': os.environ.get('ENVIRONMENT', 'unknown'),
+            's3_bucket': os.environ.get('BACKUP_BUCKET', 'unknown'),
+            's3_prefix': os.environ.get('S3_EXPORTS_PREFIX', 'native-exports'),
             'duration_seconds': int(duration.total_seconds()),
             'failed_at': end_time.isoformat()
         }
