@@ -649,7 +649,7 @@ def lambda_handler(event, context):
         clear_existing_data = event.get('clear_existing_data', False)
         max_workers = event.get('max_workers', 5)
 
-        logger.info(f"📋 Configuration:")
+        logger.info(f"  Configuration:")
         logger.info(f"  Environment: {environment}")
         logger.info(f"  S3 Bucket: {s3_bucket}")
         logger.info(f"  S3 Prefix: {s3_prefix}")  # Log the S3 prefix being used
@@ -708,7 +708,7 @@ def lambda_handler(event, context):
         if invalid_exports:
             logger.warning(f" Invalid exports found: {invalid_exports}")
 
-        logger.info(f"📊 Available exports for {backup_date}: {list(available_exports.keys())}")
+        logger.info(f"Available exports for {backup_date}: {list(available_exports.keys())}")
 
         # Check for missing exports
         missing_exports = [t for t in tables_to_restore if t not in available_exports]
@@ -856,10 +856,10 @@ def lambda_handler(event, context):
         }
 
         # Log summary
-        logger.info(f"🏁 Batch write restore completed in {duration}")
+        logger.info(f"Batch write restore completed in {duration}")
         logger.info(
-            f"📊 Results: {successful_restores} completed, {partial_restores} partial, {failed_restores} failed, {skipped_restores} skipped")
-        logger.info(f"📈 Total items: {total_items_written}/{total_items_processed} written")
+            f"Results: {successful_restores} completed, {partial_restores} partial, {failed_restores} failed, {skipped_restores} skipped")
+        logger.info(f"Total items: {total_items_written}/{total_items_processed} written")
 
         # Determine response status
         if failed_restores > 0 and successful_restores == 0:
