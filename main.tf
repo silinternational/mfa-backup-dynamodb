@@ -343,11 +343,16 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "dynamodb:UpdateContinuousBackups",
           "dynamodb:ListTagsOfResource",
           "dynamodb:TagResource",
-          "dynamodb:UntagResource"
-
+          "dynamodb:UntagResource",
+          "dynamodb:Scan",
+          "dynamodb:DeleteItem",
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+          "dynamodb:UpdateItem"
         ]
         Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*"
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*/index/*"
         ]
       },
       # DynamoDB Import Operations (requires Resource = "*")
