@@ -19,6 +19,14 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "aws_access_key_id" {
+  default = ""
+}
+
+variable "aws_secret_access_key" {
+  default = ""
+}
+
 variable "dynamodb_tables" {
   description = "List of DynamoDB table suffixes to backup"
   type        = list(string)
@@ -43,23 +51,8 @@ variable "backup_schedule" {
   default     = "cron(0 2 * *? *)" # 2 AM daily
 }
 
-# New variables for enhanced functionality
-
-/*variable "lambda_version" {
-  description = "Version identifier for Lambda functions (used in Sentry releases)"
-  type        = string
-  default     = "1.0.0"
-}*/
-
 variable "backup_schedule_enabled" {
   description = "Enable or disable the automatic backup schedule (useful for maintenance or cost control)"
   type        = bool
   default     = true
 }
-
-/*variable "sentry_dsn" {
-  description = "Sentry DSN for error tracking and failure notifications (leave empty to disable Sentry)"
-  type        = string
-  default     = "https://e6fb6aef4d4155af1043304eb4fb0eed@o4504843027480576.ingest.us.sentry.io/4509571683975168"
-  sensitive   = true
-}*/
