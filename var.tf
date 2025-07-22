@@ -20,11 +20,15 @@ variable "aws_region" {
 }
 
 variable "aws_access_key_id" {
-  default = ""
+  description = "AWS Access Key ID"
+  type        = string
+  sensitive   = false
 }
 
 variable "aws_secret_access_key" {
-  default = ""
+  description = "AWS Secret Access Key"
+  type        = string
+  sensitive   = true
 }
 
 variable "dynamodb_tables" {
