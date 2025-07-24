@@ -235,14 +235,19 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
 
 def get_backblaze_config():
     """Get Backblaze configuration from environment variables"""
-    required_vars = ['BACKBLAZE_KEY_ID', 'BACKBLAZE_APP_KEY', 'BACKBLAZE_BUCKET', 'BACKBLAZE_ENDPOINT']
+    required_vars = {
+        'b2_application_key_id': 'key_id',
+        'b2_application_key': 'app_key',
+        'b2_bucket': 'bucket',
+        'b2_endpoint': 'endpoint'
+    }
     config = {}
 
-    for var in required_vars:
-        value = os.environ.get(var)
+    for env_var, config_key in required_vars.items():
+        value = os.environ.get(env_var.upper())
         if not value:
-            raise Exception(f"Missing required Backblaze environment variable: {var}")
-        config[var.lower().replace('backblaze_', '')] = value
+            raise Exception(f"Missing required Backblaze environment variable: {env_var.upper()}")
+        config[config_key] = value
 
     return config
 
