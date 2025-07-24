@@ -55,7 +55,7 @@ This system consists of two main Lambda functions:
 ### Restore Lambda
 | Variable | Required | Description | Default | Example |
 |----------|----------|-------------|---------|---------|
-| `BACKUP_BUCKET` | Yes | S3 bucket containing backups | - | `my-backup-bucket` |
+| `BACKUP_BUCKET` | Yes | S3 bucket containing backups | - | `silidp-mfa-${var.environment}-dynamodb-backups` |
 | `ENVIRONMENT` | Yes | Environment identifier | - | `production` |
 | `S3_EXPORTS_PREFIX` | No | S3 prefix for exports | `native-exports` | `backups/dynamodb` |
 
