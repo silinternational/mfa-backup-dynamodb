@@ -1,4 +1,4 @@
-# Daily backup lambda function
+# Daily backup lambda function with Backblaze copy
 import json
 import boto3
 import os
@@ -15,11 +15,13 @@ logger.setLevel(logging.INFO)
 dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
 
+
 def decimal_default(obj):
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
+
 
 def get_account_id():
     """Get AWS account ID"""
@@ -29,6 +31,7 @@ def get_account_id():
     except Exception as e:
         logger.error(f"Failed to get account ID: {str(e)}")
         raise
+
 
 def get_region():
     """Get AWS region"""
@@ -40,6 +43,7 @@ def get_region():
         logger.error(f"Failed to get region: {str(e)}")
         # Fallback to us-east-1 if region detection fails
         return 'us-east-1'
+
 
 def get_tables_to_backup():
     """Get the list of tables to backup from Terraform environment variables"""
@@ -107,6 +111,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
             'status': 'FAILED'
         }
 
+
 def check_export_status(export_arn):
     """Check the status of a DynamoDB export"""
     try:
@@ -140,6 +145,7 @@ def check_export_status(export_arn):
             'status': 'UNKNOWN',
             'error': str(e)
         }
+
 
 def wait_for_exports_completion(export_arns, max_wait_time=840):
     """Monitor multiple exports until completion or timeout"""
@@ -177,6 +183,7 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
         logger.warning(f"Export monitoring timed out: {export_arn}")
 
     return completed_exports
+
 
 def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
     """Create a manifest file with export details"""
@@ -225,8 +232,150 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
         logger.error(f"Failed to create export manifest: {str(e)}")
         return None
 
+
+def get_backblaze_config():
+    """Get Backblaze configuration from environment variables"""
+    required_vars = ['BACKBLAZE_KEY_ID', 'BACKBLAZE_APP_KEY', 'BACKBLAZE_BUCKET', 'BACKBLAZE_ENDPOINT']
+    config = {}
+
+    for var in required_vars:
+        value = os.environ.get(var)
+        if not value:
+            raise Exception(f"Missing required Backblaze environment variable: {var}")
+        config[var.lower().replace('backblaze_', '')] = value
+
+    return config
+
+
+def list_s3_objects(bucket, prefix):
+    """List all objects in S3 with given prefix"""
+    objects = []
+    paginator = s3.get_paginator('list_objects_v2')
+
+    try:
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            if 'Contents' in page:
+                objects.extend(page['Contents'])
+
+        logger.info(f"Found {len(objects)} objects in s3://{bucket}/{prefix}")
+        return objects
+
+    except Exception as e:
+        logger.error(f"Failed to list S3 objects: {str(e)}")
+        return []
+
+
+def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
+    """Copy backup files from S3 to Backblaze"""
+    logger.info("Starting copy to Backblaze...")
+
+    try:
+        # Initialize Backblaze S3-compatible client
+        backblaze_client = boto3.client(
+            's3',
+            endpoint_url=backblaze_config['endpoint'],
+            aws_access_key_id=backblaze_config['key_id'],
+            aws_secret_access_key=backblaze_config['app_key'],
+            region_name='us-east-1'  # Backblaze uses us-east-1 for S3 compatibility
+        )
+
+        # Get list of all backup files for this date
+        backup_prefix = f"native-exports/{backup_date}/"
+        s3_objects = list_s3_objects(s3_bucket, backup_prefix)
+
+        if not s3_objects:
+            logger.warning(f"No objects found to copy for prefix: {backup_prefix}")
+            return {
+                'status': 'SUCCESS',
+                'files_copied': 0,
+                'total_size_bytes': 0,
+                'errors': []
+            }
+
+        copy_results = {
+            'status': 'SUCCESS',
+            'files_copied': 0,
+            'total_size_bytes': 0,
+            'errors': []
+        }
+
+        # Copy each file to Backblaze
+        for obj in s3_objects:
+            s3_key = obj['Key']
+            file_size = obj['Size']
+
+            # Create the same key structure in Backblaze with environment prefix
+            backblaze_key = f"{environment}/{s3_key}"
+
+            try:
+                # Get object from S3
+                s3_response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
+
+                # Upload to Backblaze (overwrite if exists)
+                backblaze_client.put_object(
+                    Bucket=backblaze_config['bucket'],
+                    Key=backblaze_key,
+                    Body=s3_response['Body'],
+                    Metadata={
+                        'original-bucket': s3_bucket,
+                        'original-key': s3_key,
+                        'backup-date': backup_date,
+                        'environment': environment,
+                        'copied-at': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+
+                copy_results['files_copied'] += 1
+                copy_results['total_size_bytes'] += file_size
+
+                logger.info(f"Successfully copied to Backblaze: {s3_key} -> {backblaze_key} ({file_size} bytes)")
+
+            except Exception as e:
+                error_msg = f"Failed to copy {s3_key}: {str(e)}"
+                logger.error(error_msg)
+                copy_results['errors'].append(error_msg)
+                copy_results['status'] = 'PARTIAL_SUCCESS' if copy_results['files_copied'] > 0 else 'FAILED'
+
+        # Create summary log
+        total_size_mb = copy_results['total_size_bytes'] / (1024 * 1024)
+        logger.info(f"Backblaze copy completed: {copy_results['files_copied']} files copied, "
+                    f"{len(copy_results['errors'])} errors, {total_size_mb:.2f}MB transferred")
+
+        # Create a copy manifest in Backblaze
+        copy_manifest = {
+            'backup_date': backup_date,
+            'environment': environment,
+            'copy_completed_at': datetime.now(timezone.utc).isoformat(),
+            'source_bucket': s3_bucket,
+            'destination_bucket': backblaze_config['bucket'],
+            'copy_results': copy_results
+        }
+
+        manifest_key = f"{environment}/native-exports/{backup_date}/backblaze-copy-manifest.json"
+        backblaze_client.put_object(
+            Bucket=backblaze_config['bucket'],
+            Key=manifest_key,
+            Body=json.dumps(copy_manifest, default=decimal_default, indent=2),
+            ContentType='application/json'
+        )
+
+        logger.info(f"Backblaze copy manifest created: {manifest_key}")
+
+        return copy_results
+
+    except Exception as e:
+        logger.error(f"Critical error in Backblaze copy: {str(e)}")
+        return {
+            'status': 'FAILED',
+            'error': str(e),
+            'files_copied': 0,
+            'total_size_bytes': 0,
+            'errors': [str(e)]
+        }
+
+
 def lambda_handler(event, context):
-    """Main Lambda handler for DynamoDB native exports"""
+    """Main Lambda handler for DynamoDB native exports with Backblaze copy"""
     logger.info("Starting MFA daily backup using DynamoDB native export")
 
     try:
@@ -301,6 +450,34 @@ def lambda_handler(event, context):
         total_size_mb = sum(r.get('billing_size_bytes', 0) for r in export_results if r.get('billing_size_bytes')) / (
                     1024 * 1024)
 
+        # Phase 4: Copy to Backblaze (ONLY if there were successful exports)
+        backblaze_copy_results = None
+        if successful_exports > 0:
+            logger.info(f"Starting Backblaze copy for {successful_exports} successful exports...")
+            try:
+                backblaze_config = get_backblaze_config()
+                backblaze_copy_results = copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment)
+                logger.info(f"Backblaze copy completed with status: {backblaze_copy_results['status']}")
+            except Exception as e:
+                logger.error(f"Backblaze copy failed: {str(e)}")
+                backblaze_copy_results = {
+                    'status': 'FAILED',
+                    'error': str(e),
+                    'files_copied': 0,
+                    'total_size_bytes': 0,
+                    'skipped_files': 0,
+                    'errors': [str(e)]
+                }
+        else:
+            logger.warning("Skipping Backblaze copy due to no successful exports")
+            backblaze_copy_results = {
+                'status': 'SKIPPED',
+                'reason': 'No successful exports to copy',
+                'files_copied': 0,
+                'total_size_bytes': 0,
+                'errors': []
+            }
+
         summary = {
             'backup_date': backup_date,
             'environment': environment,
@@ -312,15 +489,19 @@ def lambda_handler(event, context):
             'total_size_mb': round(total_size_mb, 2),
             'manifest_s3_key': manifest_key,
             's3_bucket': s3_bucket,
+            'backblaze_copy': backblaze_copy_results,
             'export_results': export_results
         }
 
         logger.info(f"Backup completed: {successful_exports} successful, {failed_exports} failed")
+        if backblaze_copy_results:
+            logger.info(
+                f"Backblaze copy: {backblaze_copy_results['files_copied']} files copied, status: {backblaze_copy_results['status']}")
 
         # Determine response status
         if failed_exports > 0 and successful_exports == 0:
             status_code = 500  # Complete failure
-        elif failed_exports > 0:
+        elif failed_exports > 0 or (backblaze_copy_results and backblaze_copy_results['status'] == 'FAILED'):
             status_code = 207  # Multi-status (partial success)
         else:
             status_code = 200  # Success
