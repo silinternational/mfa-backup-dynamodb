@@ -33,7 +33,6 @@ This system consists of two main Lambda functions:
 - **Parallel Processing**: Starts multiple exports simultaneously
 - **Export Monitoring**: Waits for exports to complete with status tracking
 - **Manifest Generation**: Creates detailed backup manifests with metadata
-- **Error Handling**: Comprehensive error handling and logging
 - **Terraform Integration**: Reads table names from Terraform environment variables
 
 ### Restore Lambda Features
@@ -49,7 +48,7 @@ This system consists of two main Lambda functions:
 ### Backup Lambda
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `BACKUP_BUCKET` | Yes | S3 bucket for storing backups | `my-backup-bucket` |
+| `BACKUP_BUCKET` | Yes | S3 bucket for storing backups | `silidp-mfa-${var.environment}-dynamodb-backups` |
 | `ENVIRONMENT` | Yes | Environment identifier | `production` |
 | `DYNAMODB_TABLES` | Yes | JSON array of table names from Terraform | `["table1", "table2"]` |
 

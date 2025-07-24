@@ -52,11 +52,44 @@ variable "lambda_timeout" {
 variable "backup_schedule" {
   description = "Cron expression for backup schedule"
   type        = string
-  default     = "cron(0 2 * *? *)" # 2 AM daily
+  default     = "cron(0 2 * * ? *)" # 2 AM daily
 }
 
 variable "backup_schedule_enabled" {
   description = "Enable or disable the automatic backup schedule (useful for maintenance or cost control)"
   type        = bool
   default     = true
+}
+
+# Backblaze B2 Configuration Variables
+variable "b2_application_key_id" {
+  description = "Backblaze B2 Application Key ID for backup copy"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "b2_application_key" {
+  description = "Backblaze B2 Application Key for backup copy"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "b2_bucket" {
+  description = "Backblaze B2 bucket name for backup copy"
+  type        = string
+  default     = ""
+}
+
+variable "b2_endpoint" {
+  description = "Backblaze B2 S3-compatible endpoint URL"
+  type        = string
+  default     = ""
+}
+
+variable "b2_backup_enabled" {
+  description = "Enable or disable Backblaze B2 backup copy (requires B2 credentials)"
+  type        = bool
+  default     = false
 }
