@@ -275,17 +275,12 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
     logger.info("Starting copy to Backblaze...")
 
     try:
-        # Ensure endpoint has https:// prefix
-        endpoint_url = backblaze_config['endpoint']
-        if not endpoint_url.startswith('http'):
-            endpoint_url = f"https://{endpoint_url}"
-
-        logger.info(f"Using Backblaze endpoint: {endpoint_url}")
+        logger.info(f"Using Backblaze endpoint: {backblaze_config['endpoint']}")
 
         # Initialize Backblaze S3-compatible client with specific configuration
         backblaze_client = boto3.client(
             's3',
-            endpoint_url=endpoint_url,
+            endpoint_url=backblaze_config['endpoint'],
             aws_access_key_id=backblaze_config['key_id'],
             aws_secret_access_key=backblaze_config['app_key'],
             region_name='us-east-1',  # Backblaze uses us-east-1 for S3 compatibility
