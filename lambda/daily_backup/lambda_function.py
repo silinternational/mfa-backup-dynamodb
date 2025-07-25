@@ -275,13 +275,26 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
     logger.info("Starting copy to Backblaze...")
 
     try:
-        # Initialize Backblaze S3-compatible client
+        # Ensure endpoint has https:// prefix
+        endpoint_url = backblaze_config['endpoint']
+        if not endpoint_url.startswith('http'):
+            endpoint_url = f"https://{endpoint_url}"
+
+        logger.info(f"Using Backblaze endpoint: {endpoint_url}")
+
+        # Initialize Backblaze S3-compatible client with specific configuration
         backblaze_client = boto3.client(
             's3',
-            endpoint_url=backblaze_config['endpoint'],
+            endpoint_url=endpoint_url,
             aws_access_key_id=backblaze_config['key_id'],
             aws_secret_access_key=backblaze_config['app_key'],
-            region_name='us-east-1'  # Backblaze uses us-east-1 for S3 compatibility
+            region_name='us-east-1',  # Backblaze uses us-east-1 for S3 compatibility
+            config=boto3.session.Config(
+                signature_version='s3v4',
+                s3={
+                    'addressing_style': 'path'
+                }
+            )
         )
 
         # Get list of all backup files for this date
@@ -316,19 +329,36 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
                 # Get object from S3
                 s3_response = s3.get_object(Bucket=s3_bucket, Key=s3_key)
 
+                # Read the content into memory to avoid streaming issues
+                file_content = s3_response['Body'].read()
+
                 # Upload to Backblaze (overwrite if exists)
-                backblaze_client.put_object(
-                    Bucket=backblaze_config['bucket'],
-                    Key=backblaze_key,
-                    Body=s3_response['Body'],
-                    Metadata={
+                # Use put_object with explicit content length and type
+                put_kwargs = {
+                    'Bucket': backblaze_config['bucket'],
+                    'Key': backblaze_key,
+                    'Body': file_content,
+                    'ContentLength': len(file_content),
+                    'Metadata': {
                         'original-bucket': s3_bucket,
                         'original-key': s3_key,
                         'backup-date': backup_date,
                         'environment': environment,
                         'copied-at': datetime.now(timezone.utc).isoformat()
                     }
-                )
+                }
+
+                # Set content type based on file extension
+                if s3_key.endswith('.json'):
+                    put_kwargs['ContentType'] = 'application/json'
+                elif s3_key.endswith('.gz'):
+                    put_kwargs['ContentType'] = 'application/gzip'
+                elif s3_key.endswith('.md5'):
+                    put_kwargs['ContentType'] = 'text/plain'
+                else:
+                    put_kwargs['ContentType'] = 'binary/octet-stream'
+
+                backblaze_client.put_object(**put_kwargs)
 
                 copy_results['files_copied'] += 1
                 copy_results['total_size_bytes'] += file_size
@@ -356,11 +386,14 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
             'copy_results': copy_results
         }
 
+        manifest_content = json.dumps(copy_manifest, default=decimal_default, indent=2)
         manifest_key = f"{environment}/native-exports/{backup_date}/backblaze-copy-manifest.json"
+
         backblaze_client.put_object(
             Bucket=backblaze_config['bucket'],
             Key=manifest_key,
-            Body=json.dumps(copy_manifest, default=decimal_default, indent=2),
+            Body=manifest_content.encode('utf-8'),
+            ContentLength=len(manifest_content.encode('utf-8')),
             ContentType='application/json'
         )
 
