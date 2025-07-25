@@ -15,6 +15,14 @@ locals {
   table_names = [
     for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"
   ]
+
+  # B2 environment variables (only set if B2 backup is enabled and credentials are provided)
+  b2_env_vars = var.b2_backup_enabled && var.b2_application_key_id != "" && var.b2_application_key != "" && var.b2_bucket != "" && var.b2_endpoint != "" ? {
+    B2_APPLICATION_KEY_ID = var.b2_application_key_id
+    B2_APPLICATION_KEY    = var.b2_application_key
+    B2_BUCKET            = var.b2_bucket
+    B2_ENDPOINT          = var.b2_endpoint
+  } : {}
 }
 
 data "aws_caller_identity" "current" {}
@@ -242,14 +250,13 @@ resource "aws_lambda_function" "daily_backup" {
   tags             = local.common_tags
 
   environment {
-    variables = {
+    variables = merge({
       # Required environment variables (no fallbacks)
-      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT   = var.environment
+      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT     = var.environment
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
-
-    }
+    }, local.b2_env_vars) # Conditionally add B2 variables
   }
 
   depends_on = [
@@ -422,12 +429,11 @@ resource "aws_lambda_function" "disaster_recovery" {
 
   environment {
     variables = {
-      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT   = var.environment
+      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT     = var.environment
       # Pass the actual table names
       DYNAMODB_TABLES = jsonencode(local.table_names)
       TABLE_PREFIX    = "mfa-api_${var.environment}_"
-
     }
   }
 
