@@ -47,8 +47,9 @@ data "archive_file" "disaster_recovery" {
 
 # S3 Bucket for backups
 resource "aws_s3_bucket" "mfa_backups" {
-  bucket = local.backup_bucket_name
-  tags   = local.common_tags
+  bucket        = local.backup_bucket_name
+  force_destroy = true  # Allow Terraform to delete bucket even if it contains objects
+  tags          = local.common_tags
 }
 
 resource "aws_s3_bucket_versioning" "mfa_backups" {
