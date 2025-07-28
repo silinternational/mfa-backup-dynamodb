@@ -1,16 +1,30 @@
 variable "environment" {
   description = "Environment name (dev or prod) - Set in Terraform Cloud workspace"
   type        = string
-  validation {
-    condition     = contains(["dev", "prod"], var.environment)
-    error_message = "Environment must be either 'dev' or 'prod'."
-  }
 }
 
 variable "itse_app_env" {
   description = "ITSE app environment"
   type        = string
   default     = ""
+}
+
+variable "app_name" {
+  description = "Application name used in resource naming"
+  type        = string
+  default     = "mfa-api"
+}
+
+variable "customer" {
+  description = "Customer identifier for tagging"
+  type        = string
+  default     = "shared"
+}
+
+variable "managed_by" {
+  description = "Tool managing the infrastructure"
+  type        = string
+  default     = "terraform"
 }
 
 variable "aws_region" {
@@ -92,4 +106,30 @@ variable "b2_backup_enabled" {
   description = "Enable or disable Backblaze B2 backup copy (requires B2 credentials)"
   type        = bool
   default     = false
+}
+
+# S3 bucket naming
+variable "backup_bucket_prefix" {
+  description = "Prefix for backup bucket naming"
+  type        = string
+  default     = "silidp"
+}
+
+variable "backup_bucket_suffix" {
+  description = "Suffix for backup bucket naming"
+  type        = string
+  default     = "dynamodb-backups"
+}
+
+# Lambda configuration
+variable "lambda_runtime" {
+  description = "Lambda runtime version"
+  type        = string
+  default     = "python3.11"
+}
+
+variable "lambda_memory_size" {
+  description = "Lambda function memory size in MB"
+  type        = number
+  default     = 128
 }
