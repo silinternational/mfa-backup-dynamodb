@@ -261,7 +261,7 @@ def create_export_manifest(
         return None
 
 
-def get_backblaze_config() -> Dict[str, str]:
+def get_backblaze_config() -> dict[str, str]:
     """Get Backblaze configuration from environment variables"""
     required_vars = {
         'b2_application_key_id': 'key_id',
@@ -316,7 +316,7 @@ def copy_to_backblaze(
             endpoint_url=backblaze_config['endpoint'],
             aws_access_key_id=backblaze_config['key_id'],
             aws_secret_access_key=backblaze_config['app_key'],
-            region_name='us-east-1',  # Backblaze uses us-east-1 for S3 compatibility
+            region_name='us-east-1',
             config=boto3.session.Config(
                 signature_version='s3v4',
                 s3={
@@ -537,11 +537,11 @@ def _handle_backblaze_copy(successful_exports: int, s3_bucket: str, backup_date:
 def _determine_status_code(failed_exports: int, successful_exports: int, backblaze_copy_results: dict[str, Any]) -> int:
     """Determine the appropriate HTTP status code"""
     if failed_exports > 0 and successful_exports == 0:
-        return 500  # Complete failure
+        return 500
     elif failed_exports > 0 or (backblaze_copy_results and backblaze_copy_results['status'] == 'FAILED'):
-        return 207  # Multi-status (partial success)
+        return 207
     else:
-        return 200  # Success
+        return 200
 
 
 def _get_backup_configuration() -> tuple[str, str, str]:
