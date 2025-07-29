@@ -1,4 +1,4 @@
-# Daily backup lambda function with Backblaze copy
+# Daily backup lambda function with Backblaze offsite backup
 import json
 import boto3
 import os
@@ -6,6 +6,9 @@ import time
 from datetime import datetime, timezone
 from decimal import Decimal
 import logging
+
+# Constants
+CONTENT_TYPE_JSON = 'application/json'
 
 # Set up logging
 logger = logging.getLogger()
@@ -215,7 +218,7 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
             Bucket=s3_bucket,
             Key=manifest_key,
             Body=json.dumps(manifest, default=decimal_default, indent=2),
-            ContentType='application/json',
+            ContentType=CONTENT_TYPE_JSON,
             Metadata={
                 'backup_date': backup_date,
                 'environment': environment,
@@ -345,7 +348,7 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
 
                 # Set content type based on file extension
                 if s3_key.endswith('.json'):
-                    put_kwargs['ContentType'] = 'application/json'
+                    put_kwargs['ContentType'] = CONTENT_TYPE_JSON
                 elif s3_key.endswith('.gz'):
                     put_kwargs['ContentType'] = 'application/gzip'
                 elif s3_key.endswith('.md5'):
@@ -389,7 +392,7 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
             Key=manifest_key,
             Body=manifest_content.encode('utf-8'),
             ContentLength=len(manifest_content.encode('utf-8')),
-            ContentType='application/json'
+            ContentType=CONTENT_TYPE_JSON
         )
 
         logger.info(f"Backblaze copy manifest created: {manifest_key}")
