@@ -5,6 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Dict, List, Any, Optional, Union
 import logging
 
 # Constants
@@ -19,14 +20,14 @@ dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
 
 
-def decimal_default(obj):
+def decimal_default(obj: Any) -> float:
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
-    raise TypeError
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def get_account_id():
+def get_account_id() -> str:
     """Get AWS account ID"""
     try:
         sts = boto3.client('sts')
@@ -36,19 +37,19 @@ def get_account_id():
         raise
 
 
-def get_region():
+def get_region() -> str:
     """Get AWS region"""
     try:
         # Region is automatically available in Lambda context
         session = boto3.Session()
-        return session.region_name
+        return session.region_name or 'us-east-1'
     except Exception as e:
         logger.error(f"Failed to get region: {str(e)}")
         # Fallback to us-east-1 if region detection fails
         return 'us-east-1'
 
 
-def get_tables_to_backup():
+def get_tables_to_backup() -> List[str]:
     """Get the list of tables to backup from Terraform environment variables"""
     # Parse table names directly from Terraform
     try:
@@ -60,18 +61,18 @@ def get_tables_to_backup():
 
     except KeyError:
         logger.error("DYNAMODB_TABLES environment variable not found")
-        raise Exception("DYNAMODB_TABLES environment variable is required")
+        raise ValueError("DYNAMODB_TABLES environment variable is required")
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse DYNAMODB_TABLES: {e}")
-        raise Exception(f"Invalid DYNAMODB_TABLES format: {e}")
+        raise ValueError(f"Invalid DYNAMODB_TABLES format: {e}")
 
 
-def generate_export_prefix(table_name, backup_date):
+def generate_export_prefix(table_name: str, backup_date: str) -> str:
     """Generate S3 prefix for the export"""
     return f"native-exports/{backup_date}/{table_name}/"
 
 
-def start_table_export(table_name, s3_bucket, backup_date):
+def start_table_export(table_name: str, s3_bucket: str, backup_date: str) -> Dict[str, Any]:
     """Start DynamoDB export to S3 for a single table"""
     logger.info(f"Starting native export for table: {table_name}")
 
@@ -115,7 +116,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
         }
 
 
-def check_export_status(export_arn):
+def check_export_status(export_arn: str) -> Dict[str, Any]:
     """Check the status of a DynamoDB export"""
     try:
         response = dynamodb.describe_export(ExportArn=export_arn)
@@ -150,15 +151,15 @@ def check_export_status(export_arn):
         }
 
 
-def wait_for_exports_completion(export_arns, max_wait_time=840):
+def wait_for_exports_completion(export_arns: List[str], max_wait_time: int = 840) -> List[Dict[str, Any]]:
     """Monitor multiple exports until completion or timeout"""
     logger.info(f"Monitoring {len(export_arns)} exports for completion...")
 
     start_time = time.time()
-    completed_exports = []
+    completed_exports: List[Dict[str, Any]] = []
 
     while export_arns and (time.time() - start_time) < max_wait_time:
-        remaining_exports = []
+        remaining_exports: List[str] = []
 
         for export_arn in export_arns:
             status_info = check_export_status(export_arn)
@@ -188,7 +189,12 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
     return completed_exports
 
 
-def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
+def create_export_manifest(
+    completed_exports: List[Dict[str, Any]],
+    backup_date: str,
+    s3_bucket: str,
+    environment: str
+) -> Optional[str]:
     """Create a manifest file with export details"""
     total_exports = len(completed_exports)
     successful_exports = len([e for e in completed_exports if e['status'] == 'COMPLETED'])
@@ -236,7 +242,7 @@ def create_export_manifest(completed_exports, backup_date, s3_bucket, environmen
         return None
 
 
-def get_backblaze_config():
+def get_backblaze_config() -> Dict[str, str]:
     """Get Backblaze configuration from environment variables"""
     required_vars = {
         'b2_application_key_id': 'key_id',
@@ -244,20 +250,20 @@ def get_backblaze_config():
         'b2_bucket': 'bucket',
         'b2_endpoint': 'endpoint'
     }
-    config = {}
+    config: Dict[str, str] = {}
 
     for env_var, config_key in required_vars.items():
         value = os.environ.get(env_var.upper())
         if not value:
-            raise Exception(f"Missing required Backblaze environment variable: {env_var.upper()}")
+            raise ValueError(f"Missing required Backblaze environment variable: {env_var.upper()}")
         config[config_key] = value
 
     return config
 
 
-def list_s3_objects(bucket, prefix):
+def list_s3_objects(bucket: str, prefix: str) -> List[Dict[str, Any]]:
     """List all objects in S3 with given prefix"""
-    objects = []
+    objects: List[Dict[str, Any]] = []
     paginator = s3.get_paginator('list_objects_v2')
 
     try:
@@ -273,7 +279,12 @@ def list_s3_objects(bucket, prefix):
         return []
 
 
-def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
+def copy_to_backblaze(
+    s3_bucket: str,
+    backup_date: str,
+    backblaze_config: Dict[str, str],
+    environment: str
+) -> Dict[str, Any]:
     """Copy backup files from S3 to Backblaze"""
     logger.info("Starting copy to Backblaze...")
 
@@ -308,7 +319,7 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
                 'errors': []
             }
 
-        copy_results = {
+        copy_results: Dict[str, Any] = {
             'status': 'SUCCESS',
             'files_copied': 0,
             'total_size_bytes': 0,
@@ -332,7 +343,7 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
 
                 # Upload to Backblaze (overwrite if exists)
                 # Use put_object with explicit content length and type
-                put_kwargs = {
+                put_kwargs: Dict[str, Any] = {
                     'Bucket': backblaze_config['bucket'],
                     'Key': backblaze_key,
                     'Body': file_content,
@@ -410,7 +421,7 @@ def copy_to_backblaze(s3_bucket, backup_date, backblaze_config, environment):
         }
 
 
-def lambda_handler(event, context):
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Union[int, str]]:
     """Main Lambda handler for DynamoDB native exports with Backblaze copy"""
     logger.info("Starting MFA daily backup using DynamoDB native export")
 
@@ -428,8 +439,8 @@ def lambda_handler(event, context):
         logger.info(f"Starting exports for {len(tables_to_backup)} tables: {tables_to_backup}")
 
         # Phase 1: Start all exports
-        export_results = []
-        export_arns = []
+        export_results: List[Dict[str, Any]] = []
+        export_arns: List[str] = []
 
         for table_name in tables_to_backup:
             try:
@@ -487,7 +498,7 @@ def lambda_handler(event, context):
                     1024 * 1024)
 
         # Phase 4: Copy to Backblaze (ONLY if there were successful exports)
-        backblaze_copy_results = None
+        backblaze_copy_results: Optional[Dict[str, Any]] = None
         if successful_exports > 0:
             logger.info(f"Starting Backblaze copy for {successful_exports} successful exports...")
             try:
