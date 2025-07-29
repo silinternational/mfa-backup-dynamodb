@@ -8,6 +8,7 @@ locals {
     environment       = var.environment
   }
 
+  # Use existing bucket name
   backup_bucket_name = var.backup_bucket_name
 
   # Dynamic table names
