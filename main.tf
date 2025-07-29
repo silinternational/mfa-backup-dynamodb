@@ -28,6 +28,11 @@ locals {
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
+# Reference existing S3 bucket (created manually)
+data "aws_s3_bucket" "mfa_backups" {
+  bucket = local.backup_bucket_name
+}
+
 # Archive Lambda functions
 data "archive_file" "daily_backup" {
   type             = "zip"
@@ -43,11 +48,6 @@ data "archive_file" "disaster_recovery" {
   output_file_mode = "0666"
   output_path      = "disaster_recovery_${var.environment}.zip"
   excludes         = ["*.pyc", "__pycache__"]
-}
-
-# Reference existing S3 bucket (created manually)
-data "aws_s3_bucket" "mfa_backups" {
-  bucket = local.backup_bucket_name
 }
 
 resource "aws_s3_bucket_versioning" "mfa_backups" {
