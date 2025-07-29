@@ -33,7 +33,6 @@ This system consists of two main Lambda functions:
 - **Parallel Processing**: Starts multiple exports simultaneously
 - **Export Monitoring**: Waits for exports to complete with status tracking
 - **Manifest Generation**: Creates detailed backup manifests with metadata
-- **Error Handling**: Comprehensive error handling and logging
 - **Terraform Integration**: Reads table names from Terraform environment variables
 
 ### Restore Lambda Features

@@ -1,24 +1,37 @@
 locals {
   common_tags = {
     itse_app_env      = var.itse_app_env
-    workspace         = var.environment # Will be set in Terraform Cloud workspace variables
-    itse_app_customer = "shared"
-    managed_by        = "terraform"
-    itse_app_name     = "mfa-api"
+    workspace         = var.environment
+    itse_app_customer = var.customer
+    managed_by        = var.managed_by
+    itse_app_name     = var.app_name
     environment       = var.environment
   }
 
-  # Environment-specific S3 bucket naming
-  backup_bucket_name = "silidp-mfa-${var.environment}-dynamodb-backups"
+  # Use existing bucket name
+  backup_bucket_name = var.backup_bucket_name
 
-  # Table names matching your actual pattern: mfa-api_ENV_TABLE_global
+  # Dynamic table names
   table_names = [
-    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"
+    for table in var.dynamodb_tables : "${var.app_name}_${var.environment}_${table}_global"
   ]
+
+  # B2 environment variables (only set if B2 backup is enabled and credentials are provided)
+  b2_env_vars = var.b2_backup_enabled && var.b2_application_key_id != "" && var.b2_application_key != "" && var.b2_bucket != "" && var.b2_endpoint != "" ? {
+    B2_APPLICATION_KEY_ID = var.b2_application_key_id
+    B2_APPLICATION_KEY    = var.b2_application_key
+    B2_BUCKET            = var.b2_bucket
+    B2_ENDPOINT          = var.b2_endpoint
+  } : {}
 }
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+
+# Reference existing S3 bucket (created manually)
+data "aws_s3_bucket" "mfa_backups" {
+  bucket = local.backup_bucket_name
+}
 
 # Archive Lambda functions
 data "archive_file" "daily_backup" {
@@ -37,21 +50,15 @@ data "archive_file" "disaster_recovery" {
   excludes         = ["*.pyc", "__pycache__"]
 }
 
-# S3 Bucket for backups (environment-specific)
-resource "aws_s3_bucket" "mfa_backups" {
-  bucket = local.backup_bucket_name
-  tags   = local.common_tags
-}
-
 resource "aws_s3_bucket_versioning" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -61,7 +68,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "mfa_backups" {
 }
 
 resource "aws_s3_bucket_public_access_block" "mfa_backups" {
-  bucket                  = aws_s3_bucket.mfa_backups.id
+  bucket                  = data.aws_s3_bucket.mfa_backups.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -70,7 +77,7 @@ resource "aws_s3_bucket_public_access_block" "mfa_backups" {
 
 # S3 bucket policy to allow DynamoDB service access for imports
 resource "aws_s3_bucket_policy" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -87,8 +94,8 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
           "s3:ListBucket"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
         Condition = {
           StringEquals = {
@@ -116,8 +123,8 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
           "s3:ListBucketVersions"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       }
     ]
@@ -126,10 +133,10 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
 
 # S3 Lifecycle policy - Environment-specific retention
 resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
 
   rule {
-    id     = "mfa_backup_lifecycle_${var.environment}"
+    id     = "${var.app_name}_backup_lifecycle_${var.environment}"
     status = "Enabled"
 
     filter {
@@ -150,7 +157,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
 
 # IAM Role for Daily Backup Lambda
 resource "aws_iam_role" "daily_backup_lambda_role" {
-  name = "mfa-daily-backup-lambda-role-${var.environment}"
+  name = "${var.app_name}-daily-backup-lambda-role-${var.environment}"
   tags = local.common_tags
 
   assume_role_policy = jsonencode({
@@ -168,7 +175,7 @@ resource "aws_iam_role" "daily_backup_lambda_role" {
 }
 
 resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
-  name = "mfa-daily-backup-lambda-policy-${var.environment}"
+  name = "${var.app_name}-daily-backup-lambda-policy-${var.environment}"
   role = aws_iam_role.daily_backup_lambda_role.id
 
   policy = jsonencode({
@@ -213,8 +220,8 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "s3:DeleteObject"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       },
       {
@@ -231,25 +238,24 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
 # Daily Backup Lambda Function
 resource "aws_lambda_function" "daily_backup" {
   filename         = data.archive_file.daily_backup.output_path
-  function_name    = "mfa-daily-backup-${var.environment}"
-  description      = "Daily MFA Backup Lambda for ${var.environment}"
+  function_name    = "${var.app_name}-daily-backup-${var.environment}"
+  description      = "Daily ${var.app_name} Backup Lambda for ${var.environment}"
   role             = aws_iam_role.daily_backup_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
-  runtime          = "python3.11"
+  runtime          = var.lambda_runtime
   timeout          = var.lambda_timeout
-  memory_size      = 128
+  memory_size      = var.lambda_memory_size
   source_code_hash = data.archive_file.daily_backup.output_base64sha256
   tags             = local.common_tags
 
   environment {
-    variables = {
-      # Required environment variables (no fallbacks)
-      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT   = var.environment
+    variables = merge({
+      # Required environment variables
+      BACKUP_BUCKET   = data.aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT     = var.environment
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
-
-    }
+    }, local.b2_env_vars) # Conditionally add B2 variables
   }
 
   depends_on = [
@@ -260,7 +266,7 @@ resource "aws_lambda_function" "daily_backup" {
 
 # CloudWatch Log Group for Daily Backup
 resource "aws_cloudwatch_log_group" "daily_backup_logs" {
-  name              = "/aws/lambda/mfa-daily-backup-${var.environment}"
+  name              = "/aws/lambda/${var.app_name}-daily-backup-${var.environment}"
   retention_in_days = var.environment == "prod" ? 30 : 14 # Shorter retention for dev
   tags              = local.common_tags
 }
@@ -268,8 +274,8 @@ resource "aws_cloudwatch_log_group" "daily_backup_logs" {
 # EventBridge Rule for Daily Backup (using your configured schedule)
 resource "aws_cloudwatch_event_rule" "daily_backup_schedule" {
   count               = var.backup_schedule_enabled ? 1 : 0
-  name                = "mfa-daily-backup-schedule-${var.environment}"
-  description         = "Trigger MFA backup daily for ${var.environment}"
+  name                = "${var.app_name}-daily-backup-schedule-${var.environment}"
+  description         = "Trigger ${var.app_name} backup daily for ${var.environment}"
   schedule_expression = var.backup_schedule
   tags                = local.common_tags
 }
@@ -277,7 +283,7 @@ resource "aws_cloudwatch_event_rule" "daily_backup_schedule" {
 resource "aws_cloudwatch_event_target" "daily_backup_target" {
   count     = var.backup_schedule_enabled ? 1 : 0
   rule      = aws_cloudwatch_event_rule.daily_backup_schedule[0].name
-  target_id = "MFADailyBackupTarget"
+  target_id = "${title(var.app_name)}DailyBackupTarget"
   arn       = aws_lambda_function.daily_backup.arn
 }
 
@@ -292,7 +298,7 @@ resource "aws_lambda_permission" "allow_eventbridge" {
 
 # IAM Role for Disaster Recovery Lambda
 resource "aws_iam_role" "disaster_recovery_lambda_role" {
-  name = "mfa-disaster-recovery-lambda-role-${var.environment}"
+  name = "${var.app_name}-disaster-recovery-lambda-role-${var.environment}"
   tags = local.common_tags
 
   assume_role_policy = jsonencode({
@@ -311,7 +317,7 @@ resource "aws_iam_role" "disaster_recovery_lambda_role" {
 
 # Enhanced disaster recovery Lambda policy with import permissions
 resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
-  name = "mfa-disaster-recovery-lambda-policy-${var.environment}"
+  name = "${var.app_name}-disaster-recovery-lambda-policy-${var.environment}"
   role = aws_iam_role.disaster_recovery_lambda_role.id
 
   policy = jsonencode({
@@ -351,8 +357,8 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "dynamodb:UpdateItem"
         ]
         Resource = [
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*",
-          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/mfa-api_${var.environment}_*/index/*"
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.app_name}_${var.environment}_*",
+          "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${var.app_name}_${var.environment}_*/index/*"
         ]
       },
       # DynamoDB Import Operations (requires Resource = "*")
@@ -386,8 +392,8 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "s3:ListBucketVersions"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       },
       # CloudWatch for monitoring import progress
@@ -399,7 +405,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
         Resource = "*"
         Condition = {
           StringEquals = {
-            "cloudwatch:namespace" = "MFA/DisasterRecovery"
+            "cloudwatch:namespace" = "${var.app_name}/DisasterRecovery"
           }
         }
       }
@@ -410,24 +416,23 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
 # Disaster Recovery Lambda Function
 resource "aws_lambda_function" "disaster_recovery" {
   filename         = data.archive_file.disaster_recovery.output_path
-  function_name    = "mfa-disaster-recovery-${var.environment}"
-  description      = "MFA Disaster Recovery Lambda for ${var.environment} "
+  function_name    = "${var.app_name}-disaster-recovery-${var.environment}"
+  description      = "${var.app_name} Disaster Recovery Lambda for ${var.environment}"
   role             = aws_iam_role.disaster_recovery_lambda_role.arn
   handler          = "lambda_function.lambda_handler"
-  runtime          = "python3.11"
+  runtime          = var.lambda_runtime
   timeout          = var.lambda_timeout
-  memory_size      = 128
+  memory_size      = var.lambda_memory_size
   source_code_hash = data.archive_file.disaster_recovery.output_base64sha256
   tags             = local.common_tags
 
   environment {
     variables = {
-      BACKUP_BUCKET = aws_s3_bucket.mfa_backups.bucket
-      ENVIRONMENT   = var.environment
+      BACKUP_BUCKET   = data.aws_s3_bucket.mfa_backups.bucket
+      ENVIRONMENT     = var.environment
       # Pass the actual table names
       DYNAMODB_TABLES = jsonencode(local.table_names)
-      TABLE_PREFIX    = "mfa-api_${var.environment}_"
-
+      TABLE_PREFIX    = "${var.app_name}_${var.environment}_"
     }
   }
 
@@ -439,7 +444,7 @@ resource "aws_lambda_function" "disaster_recovery" {
 
 # CloudWatch Log Group for Disaster Recovery
 resource "aws_cloudwatch_log_group" "disaster_recovery_logs" {
-  name              = "/aws/lambda/mfa-disaster-recovery-${var.environment}"
+  name              = "/aws/lambda/${var.app_name}-disaster-recovery-${var.environment}"
   retention_in_days = var.environment == "prod" ? 30 : 14
   tags              = local.common_tags
 }
