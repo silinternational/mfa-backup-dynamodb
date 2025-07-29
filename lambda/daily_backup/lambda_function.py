@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Optional, Union
 import logging
 
 # Constants
@@ -20,7 +20,7 @@ dynamodb = boto3.client('dynamodb')
 s3 = boto3.client('s3')
 
 
-def decimal_default(obj: Any) -> float:
+def decimal_default(obj: Decimal) -> float:
     """JSON serializer for objects not serializable by default"""
     if isinstance(obj, Decimal):
         return float(obj)
@@ -49,7 +49,7 @@ def get_region() -> str:
         return 'us-east-1'
 
 
-def get_tables_to_backup() -> List[str]:
+def get_tables_to_backup() -> list[str]:
     """Get the list of tables to backup from Terraform environment variables"""
     # Parse table names directly from Terraform
     try:
@@ -72,7 +72,7 @@ def generate_export_prefix(table_name: str, backup_date: str) -> str:
     return f"native-exports/{backup_date}/{table_name}/"
 
 
-def start_table_export(table_name: str, s3_bucket: str, backup_date: str) -> Dict[str, Any]:
+def start_table_export(table_name: str, s3_bucket: str, backup_date: str) -> dict[str, Any]:
     """Start DynamoDB export to S3 for a single table"""
     logger.info(f"Starting native export for table: {table_name}")
 
@@ -116,7 +116,7 @@ def start_table_export(table_name: str, s3_bucket: str, backup_date: str) -> Dic
         }
 
 
-def check_export_status(export_arn: str) -> Dict[str, Any]:
+def check_export_status(export_arn: str) -> dict[str, Any]:
     """Check the status of a DynamoDB export"""
     try:
         response = dynamodb.describe_export(ExportArn=export_arn)
@@ -151,15 +151,15 @@ def check_export_status(export_arn: str) -> Dict[str, Any]:
         }
 
 
-def wait_for_exports_completion(export_arns: List[str], max_wait_time: int = 840) -> List[Dict[str, Any]]:
+def wait_for_exports_completion(export_arns: list[str], max_wait_time: int = 840) -> list[dict[str, Any]]:
     """Monitor multiple exports until completion or timeout"""
     logger.info(f"Monitoring {len(export_arns)} exports for completion...")
 
     start_time = time.time()
-    completed_exports: List[Dict[str, Any]] = []
+    completed_exports: list[dict[str, Any]] = []
 
     while export_arns and (time.time() - start_time) < max_wait_time:
-        remaining_exports: List[str] = []
+        remaining_exports: list[str] = []
 
         for export_arn in export_arns:
             status_info = check_export_status(export_arn)
@@ -190,7 +190,7 @@ def wait_for_exports_completion(export_arns: List[str], max_wait_time: int = 840
 
 
 def create_export_manifest(
-    completed_exports: List[Dict[str, Any]],
+    completed_exports: list[dict[str, Any]],
     backup_date: str,
     s3_bucket: str,
     environment: str
@@ -242,7 +242,7 @@ def create_export_manifest(
         return None
 
 
-def get_backblaze_config() -> Dict[str, str]:
+def get_backblaze_config() -> dict[str, str]:
     """Get Backblaze configuration from environment variables"""
     required_vars = {
         'b2_application_key_id': 'key_id',
@@ -250,7 +250,7 @@ def get_backblaze_config() -> Dict[str, str]:
         'b2_bucket': 'bucket',
         'b2_endpoint': 'endpoint'
     }
-    config: Dict[str, str] = {}
+    config: dict[str, str] = {}
 
     for env_var, config_key in required_vars.items():
         value = os.environ.get(env_var.upper())
@@ -261,9 +261,9 @@ def get_backblaze_config() -> Dict[str, str]:
     return config
 
 
-def list_s3_objects(bucket: str, prefix: str) -> List[Dict[str, Any]]:
+def list_s3_objects(bucket: str, prefix: str) -> list[dict[str, Any]]:
     """List all objects in S3 with given prefix"""
-    objects: List[Dict[str, Any]] = []
+    objects: list[dict[str, Any]] = []
     paginator = s3.get_paginator('list_objects_v2')
 
     try:
@@ -282,9 +282,9 @@ def list_s3_objects(bucket: str, prefix: str) -> List[Dict[str, Any]]:
 def copy_to_backblaze(
     s3_bucket: str,
     backup_date: str,
-    backblaze_config: Dict[str, str],
+    backblaze_config: dict[str, str],
     environment: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Copy backup files from S3 to Backblaze"""
     logger.info("Starting copy to Backblaze...")
 
@@ -319,7 +319,7 @@ def copy_to_backblaze(
                 'errors': []
             }
 
-        copy_results: Dict[str, Any] = {
+        copy_results: dict[str, Any] = {
             'status': 'SUCCESS',
             'files_copied': 0,
             'total_size_bytes': 0,
@@ -343,7 +343,7 @@ def copy_to_backblaze(
 
                 # Upload to Backblaze (overwrite if exists)
                 # Use put_object with explicit content length and type
-                put_kwargs: Dict[str, Any] = {
+                put_kwargs: dict[str, Any] = {
                     'Bucket': backblaze_config['bucket'],
                     'Key': backblaze_key,
                     'Body': file_content,
@@ -421,7 +421,7 @@ def copy_to_backblaze(
         }
 
 
-def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Union[int, str]]:
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Union[int, str]]:
     """Main Lambda handler for DynamoDB native exports with Backblaze copy"""
     logger.info("Starting MFA daily backup using DynamoDB native export")
 
@@ -439,8 +439,8 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Union[int, 
         logger.info(f"Starting exports for {len(tables_to_backup)} tables: {tables_to_backup}")
 
         # Phase 1: Start all exports
-        export_results: List[Dict[str, Any]] = []
-        export_arns: List[str] = []
+        export_results: list[dict[str, Any]] = []
+        export_arns: list[str] = []
 
         for table_name in tables_to_backup:
             try:
@@ -498,7 +498,7 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Union[int, 
                     1024 * 1024)
 
         # Phase 4: Copy to Backblaze (ONLY if there were successful exports)
-        backblaze_copy_results: Optional[Dict[str, Any]] = None
+        backblaze_copy_results: Optional[dict[str, Any]] = None
         if successful_exports > 0:
             logger.info(f"Starting Backblaze copy for {successful_exports} successful exports...")
             try:
