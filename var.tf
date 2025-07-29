@@ -108,17 +108,10 @@ variable "b2_backup_enabled" {
   default     = false
 }
 
-# S3 bucket naming
-variable "backup_bucket_prefix" {
-  description = "Prefix for backup bucket naming"
+# S3 bucket configuration
+variable "backup_bucket_name" {
+  description = "Name of existing S3 bucket for backups (created manually outside Terraform)"
   type        = string
-  default     = "silidp"
-}
-
-variable "backup_bucket_suffix" {
-  description = "Suffix for backup bucket naming"
-  type        = string
-  default     = "dynamodb-backups"
 }
 
 # Lambda configuration

@@ -8,8 +8,7 @@ locals {
     environment       = var.environment
   }
 
-  # Dynamic S3 bucket naming
-  backup_bucket_name = "${var.backup_bucket_prefix}-${var.app_name}-${var.environment}-${var.backup_bucket_suffix}"
+  backup_bucket_name = var.backup_bucket_name
 
   # Dynamic table names
   table_names = [
@@ -45,22 +44,20 @@ data "archive_file" "disaster_recovery" {
   excludes         = ["*.pyc", "__pycache__"]
 }
 
-# S3 Bucket for backups
-resource "aws_s3_bucket" "mfa_backups" {
-  bucket        = local.backup_bucket_name
-  force_destroy = true  # Allow Terraform to delete bucket even if it contains objects
-  tags          = local.common_tags
+# Reference existing S3 bucket (created manually)
+data "aws_s3_bucket" "mfa_backups" {
+  bucket = local.backup_bucket_name
 }
 
 resource "aws_s3_bucket_versioning" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -70,7 +67,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "mfa_backups" {
 }
 
 resource "aws_s3_bucket_public_access_block" "mfa_backups" {
-  bucket                  = aws_s3_bucket.mfa_backups.id
+  bucket                  = data.aws_s3_bucket.mfa_backups.id
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -79,7 +76,7 @@ resource "aws_s3_bucket_public_access_block" "mfa_backups" {
 
 # S3 bucket policy to allow DynamoDB service access for imports
 resource "aws_s3_bucket_policy" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -96,8 +93,8 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
           "s3:ListBucket"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
         Condition = {
           StringEquals = {
@@ -125,8 +122,8 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
           "s3:ListBucketVersions"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       }
     ]
@@ -135,7 +132,7 @@ resource "aws_s3_bucket_policy" "mfa_backups" {
 
 # S3 Lifecycle policy - Environment-specific retention
 resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
-  bucket = aws_s3_bucket.mfa_backups.id
+  bucket = data.aws_s3_bucket.mfa_backups.id
 
   rule {
     id     = "${var.app_name}_backup_lifecycle_${var.environment}"
@@ -222,8 +219,8 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "s3:DeleteObject"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       },
       {
@@ -253,7 +250,7 @@ resource "aws_lambda_function" "daily_backup" {
   environment {
     variables = merge({
       # Required environment variables
-      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
+      BACKUP_BUCKET   = data.aws_s3_bucket.mfa_backups.bucket
       ENVIRONMENT     = var.environment
       # Table names constructed from Terraform variables
       DYNAMODB_TABLES = jsonencode(local.table_names)
@@ -394,8 +391,8 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "s3:ListBucketVersions"
         ]
         Resource = [
-          aws_s3_bucket.mfa_backups.arn,
-          "${aws_s3_bucket.mfa_backups.arn}/*"
+          data.aws_s3_bucket.mfa_backups.arn,
+          "${data.aws_s3_bucket.mfa_backups.arn}/*"
         ]
       },
       # CloudWatch for monitoring import progress
@@ -430,7 +427,7 @@ resource "aws_lambda_function" "disaster_recovery" {
 
   environment {
     variables = {
-      BACKUP_BUCKET   = aws_s3_bucket.mfa_backups.bucket
+      BACKUP_BUCKET   = data.aws_s3_bucket.mfa_backups.bucket
       ENVIRONMENT     = var.environment
       # Pass the actual table names
       DYNAMODB_TABLES = jsonencode(local.table_names)
