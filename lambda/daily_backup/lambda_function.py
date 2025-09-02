@@ -17,6 +17,7 @@ s3 = boto3.client('s3')
 
 def decimal_default(obj):
     """JSON serializer for objects not serializable by default"""
+    # Convert Decimal objects to float for JSON serialization
     if isinstance(obj, Decimal):
         return float(obj)
     raise TypeError
@@ -24,6 +25,7 @@ def decimal_default(obj):
 def get_account_id():
     """Get AWS account ID"""
     try:
+        # Get account ID from STS for constructing table ARNs
         sts = boto3.client('sts')
         return sts.get_caller_identity()['Account']
     except Exception as e:
@@ -33,7 +35,7 @@ def get_account_id():
 def get_region():
     """Get AWS region"""
     try:
-        # Region is automatically available in Lambda context
+        # Get current region from Lambda context
         session = boto3.Session()
         return session.region_name
     except Exception as e:
@@ -43,8 +45,8 @@ def get_region():
 
 def get_tables_to_backup():
     """Get the list of tables to backup from Terraform environment variables"""
-    # Parse table names directly from Terraform
     try:
+        # Parse table names from Terraform JSON environment variable
         tables_json = os.environ['DYNAMODB_TABLES']
         tables = json.loads(tables_json)
 
@@ -61,6 +63,7 @@ def get_tables_to_backup():
 
 def generate_export_prefix(table_name, backup_date):
     """Generate S3 prefix for the export"""
+    # Create organized S3 path: native-exports/YYYY-MM-DD/table_name/
     return f"native-exports/{backup_date}/{table_name}/"
 
 
@@ -69,7 +72,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
     logger.info(f"Starting native export for table: {table_name}")
 
     try:
-        # Get table ARN
+        # Build table ARN for export API
         account_id = get_account_id()
         region = get_region()
         table_arn = f"arn:aws:dynamodb:{region}:{account_id}:table/{table_name}"
@@ -77,7 +80,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
         # Generate S3 prefix for this export
         s3_prefix = generate_export_prefix(table_name, backup_date)
 
-        # Start the export
+        # Start the native DynamoDB export
         response = dynamodb.export_table_to_point_in_time(
             TableArn=table_arn,
             S3Bucket=s3_bucket,
@@ -86,6 +89,7 @@ def start_table_export(table_name, s3_bucket, backup_date):
             ExportType='FULL_EXPORT'
         )
 
+        # Extract export details
         export_arn = response['ExportDescription']['ExportArn']
         export_time = response['ExportDescription']['ExportTime']
 
@@ -110,9 +114,11 @@ def start_table_export(table_name, s3_bucket, backup_date):
 def check_export_status(export_arn):
     """Check the status of a DynamoDB export"""
     try:
+        # Get current export status from DynamoDB
         response = dynamodb.describe_export(ExportArn=export_arn)
         export_desc = response['ExportDescription']
 
+        # Build status result with export details
         result = {
             'export_arn': export_arn,
             'status': export_desc['ExportStatus'],
@@ -148,12 +154,14 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
     start_time = time.time()
     completed_exports = []
 
+    # Poll export status until all complete or timeout
     while export_arns and (time.time() - start_time) < max_wait_time:
         remaining_exports = []
 
         for export_arn in export_arns:
             status_info = check_export_status(export_arn)
 
+            # Check if export finished
             if status_info['status'] in ['COMPLETED', 'FAILED']:
                 completed_exports.append(status_info)
                 if status_info['status'] == 'COMPLETED':
@@ -161,15 +169,17 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
                 else:
                     logger.error(f"Export failed: {export_arn} - {status_info.get('failure_message', 'Unknown error')}")
             else:
+                # Still in progress, keep monitoring
                 remaining_exports.append(export_arn)
                 logger.info(f"Export in progress: {export_arn} - Status: {status_info['status']}")
 
         export_arns = remaining_exports
 
+        # Wait before next check
         if export_arns:
-            time.sleep(30)  # Wait 30 seconds before checking again
+            time.sleep(30)
 
-    # Handle any remaining exports that didn't complete
+    # Handle timed out exports
     for export_arn in export_arns:
         status_info = check_export_status(export_arn)
         status_info['timeout'] = True
@@ -180,12 +190,14 @@ def wait_for_exports_completion(export_arns, max_wait_time=840):
 
 def create_export_manifest(completed_exports, backup_date, s3_bucket, environment):
     """Create a manifest file with export details"""
+    # Calculate summary statistics
     total_exports = len(completed_exports)
     successful_exports = len([e for e in completed_exports if e['status'] == 'COMPLETED'])
     failed_exports = len([e for e in completed_exports if e['status'] in ['FAILED', 'UNKNOWN']])
     total_items = sum(e.get('item_count', 0) for e in completed_exports if e.get('item_count'))
     total_size_bytes = sum(e.get('billing_size_bytes', 0) for e in completed_exports if e.get('billing_size_bytes'))
 
+    # Build manifest with backup metadata
     manifest = {
         'backup_date': backup_date,
         'environment': environment,
@@ -298,8 +310,7 @@ def lambda_handler(event, context):
         successful_exports = len([r for r in export_results if r.get('status') == 'COMPLETED'])
         failed_exports = len([r for r in export_results if r.get('status') in ['FAILED', 'UNKNOWN']])
         total_items = sum(r.get('item_count', 0) for r in export_results if r.get('item_count'))
-        total_size_mb = sum(r.get('billing_size_bytes', 0) for r in export_results if r.get('billing_size_bytes')) / (
-                    1024 * 1024)
+        total_size_mb = sum(r.get('billing_size_bytes', 0) for r in export_results if r.get('billing_size_bytes')) / (1024 * 1024)
 
         summary = {
             'backup_date': backup_date,

@@ -1,26 +1,18 @@
 locals {
   common_tags = {
     itse_app_env      = var.itse_app_env
-    workspace         = var.environment # Will be set in Terraform Cloud workspace variables
     itse_app_customer = "shared"
     managed_by        = "terraform"
     itse_app_name     = "mfa-api"
     environment       = var.environment
   }
-
-  # Environment-specific S3 bucket naming
   backup_bucket_name = "silidp-mfa-${var.environment}-dynamodb-backups"
-
-  # Table names matching your actual pattern: mfa-api_ENV_TABLE_global
-  table_names = [
-    for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"
-  ]
+  table_names = [for table in var.dynamodb_tables : "mfa-api_${var.environment}_${table}_global"]
 }
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
-# Archive Lambda functions
 data "archive_file" "daily_backup" {
   type             = "zip"
   source_dir       = "${path.module}/lambda/daily_backup"
@@ -136,9 +128,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "mfa_backups" {
       prefix = "exports/"
     }
 
-    # Different retention for dev vs prod
     expiration {
-      days = var.environment == "prod" ? var.backup_retention_days : 14 # Shorter retention for dev
+      days = var.backup_retention_days
     }
 
     # Delete old versions after 7 days
@@ -181,7 +172,7 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:aws:logs:*:*:*"
       },
       {
         Effect = "Allow"
@@ -192,16 +183,10 @@ resource "aws_iam_role_policy" "daily_backup_lambda_policy" {
           "dynamodb:ListExports",
           "dynamodb:DescribeContinuousBackups"
         ]
-        Resource = concat(
-          # Table permissions
-          [for table_name in local.table_names :
-            "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${table_name}"
-          ],
-          # Export permissions - pattern for export ARNs
-          [for table_name in local.table_names :
-            "arn:aws:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/${table_name}/export/*"
-          ]
-        )
+        Resource = [
+          "arn:aws:dynamodb:*:*:table/mfa-api_${var.environment}_*",
+          "arn:aws:dynamodb:*:*:table/mfa-api_${var.environment}_*/export/*"
+        ]
       },
       {
         Effect = "Allow"
@@ -258,10 +243,9 @@ resource "aws_lambda_function" "daily_backup" {
   ]
 }
 
-# CloudWatch Log Group for Daily Backup
 resource "aws_cloudwatch_log_group" "daily_backup_logs" {
   name              = "/aws/lambda/mfa-daily-backup-${var.environment}"
-  retention_in_days = var.environment == "prod" ? 30 : 14 # Shorter retention for dev
+  retention_in_days = 14
   tags              = local.common_tags
 }
 
@@ -326,7 +310,7 @@ resource "aws_iam_role_policy" "disaster_recovery_lambda_policy" {
           "logs:DescribeLogGroups",
           "logs:DescribeLogStreams"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:*"
+        Resource = "arn:aws:logs:*:*:*"
       },
       # Table-specific DynamoDB permissions
       {
@@ -437,9 +421,8 @@ resource "aws_lambda_function" "disaster_recovery" {
   ]
 }
 
-# CloudWatch Log Group for Disaster Recovery
 resource "aws_cloudwatch_log_group" "disaster_recovery_logs" {
   name              = "/aws/lambda/mfa-disaster-recovery-${var.environment}"
-  retention_in_days = var.environment == "prod" ? 30 : 14
+  retention_in_days = 14
   tags              = local.common_tags
 }

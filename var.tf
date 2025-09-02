@@ -1,10 +1,6 @@
 variable "environment" {
-  description = "Environment name (dev or prod) - Set in Terraform Cloud workspace"
+  description = "Environment name - Set in Terraform Cloud workspace"
   type        = string
-  validation {
-    condition     = contains(["dev", "prod"], var.environment)
-    error_message = "Environment must be either 'dev' or 'prod'."
-  }
 }
 
 variable "itse_app_env" {
